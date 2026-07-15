@@ -2,11 +2,15 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.core.database import get_db
-from app.routers import auth
+from app.routers import auth, fir, police, chat
 
 app = FastAPI(title="LawAid Backend")
 
+
 app.include_router(auth.router)
+app.include_router(fir.router)
+app.include_router(police.router)
+app.include_router(chat.router)
 
 @app.get("/health")
 def health_check():
