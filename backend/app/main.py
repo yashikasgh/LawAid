@@ -3,10 +3,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.core.database import get_db
 from app.routers import auth, fir, police, chat
+from app.middleware.audit_log import audit_log_middleware
 
 app = FastAPI(title="LawAid Backend")
 
-
+app.middleware("http")(audit_log_middleware)
 app.include_router(auth.router)
 app.include_router(fir.router)
 app.include_router(police.router)

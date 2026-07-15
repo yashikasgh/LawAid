@@ -31,3 +31,18 @@ def login(user_in: UserCreate, db: Session = Depends(get_db)):
 
     token = create_access_token({"sub": str(user.id), "role": user.role})
     return {"access_token": token}
+
+@router.post("/refresh")
+def refresh_token(current_user_id: str):
+    from app.core.database import SessionLocal
+    db = SessionLocal()
+    user = db.query(User).filter(User.id == int(current_user_id)).first()
+    db.close()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid user")
+    token = create_access_token({"sub": str(user.id), "role": user.role})
+    return {"access_token": token}
+
+@router.post("/logout")
+def logout():
+    return {"message": "Logged out successfully. Please discard your token client-side."}
