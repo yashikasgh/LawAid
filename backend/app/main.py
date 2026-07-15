@@ -16,3 +16,9 @@ def health_check():
 def health_check_db(db: Session = Depends(get_db)):
     db.execute(text("SELECT 1"))
     return {"status": "ok", "database": "connected"}
+
+from app.core.deps import get_current_user
+
+@app.get("/auth/me")
+def read_current_user(current_user = Depends(get_current_user)):
+    return {"id": current_user.id, "email": current_user.email, "role": current_user.role}
