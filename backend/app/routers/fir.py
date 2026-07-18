@@ -5,6 +5,7 @@ from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.services.fir_auth import register_fir, verify_fir
 from app.models.user import User
+from app.services.duplicate_check import check_duplicate
 
 router = APIRouter(prefix="/fir", tags=["fir"])
 
@@ -71,3 +72,8 @@ def search_bns(query: str = Query(..., min_length=3)):
     if top_result["similarity"] < 0.72:
         return {"status": "insufficient_information", "results": []}
     return {"status": "ok", "results": mock_results}
+
+@router.post("/check-duplicate")
+def check_duplicate_route(complaint_text: str, db: Session = Depends(get_db)):
+    result = check_duplicate(db, complaint_text)
+    return result
