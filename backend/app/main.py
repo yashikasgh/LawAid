@@ -1,3 +1,4 @@
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -6,6 +7,13 @@ from app.routers import auth, fir, police, chat
 from app.middleware.audit_log import audit_log_middleware
 
 app = FastAPI(title="LawAid Backend")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 
 app.middleware("http")(audit_log_middleware)
 app.include_router(auth.router)
