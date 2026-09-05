@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: 'Inter', Arial, Helvetica, sans-serif;
+
+  /* LawAid brand palette */
+  --color-navy: #0D2B55;
+  --color-lawblue: #1A4A8A;
+  --color-gold: #C8971A;
+  --color-lblue: #E8F0FB;
+  --color-lgreen: #E8F8F0;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}

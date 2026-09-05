@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: lawaid-postgres
+    environment:
+      POSTGRES_USER: lawaid
+      POSTGRES_PASSWORD: lawaid123
+      POSTGRES_DB: lawaid
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  mongo:
+    image: mongo:7
+    container_name: lawaid-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  redis:
+    image: redis:7
+    container_name: lawaid-redis
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:
+  mongo_data:
