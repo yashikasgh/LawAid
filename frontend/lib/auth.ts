@@ -1,38 +1,56 @@
-// lib/auth.ts
 import { authAPI } from './api'
 
 export type LawAidUser = {
   id: number
   email: string
-  role: string // lowercase: citizen / police / lawyer / admin
+  role: string
 }
 
-// Call this right after a successful login. Stores the token in both
-// localStorage (used by lib/api.ts for Authorization headers, browser-only)
-// AND a cookie (used by middleware.ts, which runs server-side and cannot
-// read localStorage at all). Both are needed — they serve different layers.
-export async function completeLogin(accessToken: string): Promise<LawAidUser> {
+export async function completeLogin(
+  accessToken: string
+): Promise<LawAidUser> {
   localStorage.setItem('lawaid_token', accessToken)
-  document.cookie = `lawaid_token=${accessToken}; path=/; max-age=86400`
+
+  document.cookie = `lawaid_token=${accessToken}; path=/; max-age=86400; SameSite=Lax`
 
   const res = await authAPI.me()
   const user: LawAidUser = res.data
-  localStorage.setItem('lawaid_role', user.role)
+
+  const role = user.role.toLowerCase()
+
+  localStorage.setItem('lawaid_role', role)
   localStorage.setItem('lawaid_user', JSON.stringify(user))
-  document.cookie = `lawaid_role=${user.role}; path=/; max-age=86400`
+
+  document.cookie = `lawaid_role=${role}; path=/; max-age=86400; SameSite=Lax`
+
   return user
 }
 
 export function getStoredUser(): LawAidUser | null {
   if (typeof window === 'undefined') return null
+
   const raw = localStorage.getItem('lawaid_user')
-  return raw ? JSON.parse(raw) : null
+
+  if (!raw) return null
+
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
 }
 
-export function logout() {
+export async function logout() {
+  try {
+    await authAPI.logout()
+  } catch {
+    // Continue with client-side logout even if the backend request fails.
+  }
+
   localStorage.removeItem('lawaid_token')
   localStorage.removeItem('lawaid_role')
   localStorage.removeItem('lawaid_user')
+
   document.cookie = 'lawaid_token=; path=/; max-age=0'
   document.cookie = 'lawaid_role=; path=/; max-age=0'
 }
