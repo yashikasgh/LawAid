@@ -31,13 +31,16 @@ def build_retrieval_queries(ner_result: Dict[str, Any]) -> Dict[str, Any]:
     if not offence_types:
         return {"queries": []}
 
+    raw_text = str(ner_result.get("raw_text", "")).strip()
+
     queries = []
     for offence in offence_types:
         offence_str = str(offence).strip()
         if offence_str:
+            query_str = f"{offence_str} {raw_text}".strip() if raw_text else offence_str
             queries.append({
                 "offence_type": offence_str,
-                "query": offence_str
+                "query": query_str
             })
 
     return {"queries": queries}

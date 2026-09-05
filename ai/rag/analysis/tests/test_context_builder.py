@@ -166,6 +166,106 @@ class TestContextBuilder(unittest.TestCase):
         self.assertEqual(ner_res, ner_copy, "build_legal_context mutated ner_result!")
         self.assertEqual(ret_res, ret_copy, "build_legal_context mutated retrieval_result!")
 
+    def test_7_candidate_focused_fields(self):
+        """Test 7: Candidate-focused target_clause_text and schedule_1 fields are properly extracted."""
+        ner_res = {"offence_types": ["criminal intimidation"], "raw_text": "Threatened to kill."}
+        sample_text = (
+            "Bharatiya Nyaya Sanhita (BNS), 2023\n\n"
+            "Section: 351 (Clause 351(3))\n"
+            "Title: Criminal intimidation.\n\n"
+            "Legal Text:\n"
+            "351. Criminal intimidation.—(1) Whoever threatens another by any means...\n"
+            "(2) Whoever commits the offence...\n"
+            "(3) Whoever commits the offence of criminal intimidation by threatening to cause death...\n\n"
+            "Schedule I Classification\n\n"
+            "Offence:\n"
+            "If threat be to cause death or grievous hurt, etc.\n\n"
+            "Punishment:\n"
+            "Imprisonment for 7 years, or fine, or both.\n\n"
+            "Cognizable:\n"
+            "Non-cognizable\n\n"
+            "Bailable:\n"
+            "Bailable\n\n"
+            "Court:\n"
+            "Magistrate of the first class."
+        )
+        ret_res = {
+            "results": [
+                {
+                    "offence_type": "criminal intimidation",
+                    "retrieved": [
+                        {
+                            "rank": 1,
+                            "id": "bns_351_351(3)",
+                            "section": 351,
+                            "clause": "351(3)",
+                            "title": "Criminal intimidation.",
+                            "distance": 0.25,
+                            "text": sample_text
+                        }
+                    ]
+                }
+            ]
+        }
+
+        ctx = build_legal_context(ner_res, ret_res)
+        doc = ctx["legal_context"][0]["results"][0]
+
+        self.assertIn("target_clause_text", doc)
+        self.assertIn("section_definition", doc)
+        self.assertIn("schedule_1", doc)
+        self.assertIn("threatening to cause death", doc["target_clause_text"])
+        self.assertEqual(doc["schedule_1"]["punishment"], "Imprisonment for 7 years, or fine, or both.")
+        self.assertEqual(doc["schedule_1"]["cognizable"], "Non-cognizable")
+
+    def test_8_reranked_candidates_integration_preserves_invariants(self):
+        """Test 8: Reranked candidates list preserves document_id, section, clause, target_clause_text and Schedule I invariants."""
+        ner_res = {
+            "offence_types": [],
+            "persons": ["Vijay"],
+            "raw_text": "The accused entered the shop and took a mobile phone belonging to Vijay without his permission."
+        }
+        reranked_candidates = [
+            {
+                "id": "bns_303_303(2)-2",
+                "document_id": "bns_303_303(2)-2",
+                "section": "303",
+                "clause": "303(2)",
+                "title": "Theft.",
+                "distance": 0.4040,
+                "rank": 9,
+                "rerank_score": 1.1480,
+                "scoring_reasons": ["Base vector similarity score: 0.7980", "Matches core elements (+0.35)"],
+                "text": (
+                    "Bharatiya Nyaya Sanhita (BNS), 2023\n\n"
+                    "Section: 303\nTitle: Theft.\n\nLegal Text:\n303. Theft.—(1) Whoever, intending to take dishonestly...\n"
+                    "(2) Whoever commits theft shall be punished...\n\n"
+                    "Schedule I Classification\n\nOffence:\nTheft.\n\nPunishment:\nImprisonment for 3 years, or fine, or both.\n\n"
+                    "Cognizable:\nCognizable.\n\nBailable:\nNon-bailable.\n\nCourt:\nAny Magistrate."
+                )
+            }
+        ]
+
+        ctx = build_legal_context(ner_res, reranked_candidates)
+
+        self.assertIn("legal_context", ctx)
+        self.assertEqual(len(ctx["legal_context"]), 1)
+        doc = ctx["legal_context"][0]["results"][0]
+
+        # Verify invariants
+        self.assertEqual(doc["document_id"], "bns_303_303(2)-2")
+        self.assertEqual(doc["id"], "bns_303_303(2)-2")
+        self.assertEqual(doc["section"], "303")
+        self.assertEqual(doc["clause"], "303(2)")
+        self.assertIn("Whoever commits theft shall be punished", doc["target_clause_text"])
+        self.assertEqual(doc["schedule_1"]["offence"], "Theft.")
+        self.assertEqual(doc["schedule_1"]["punishment"], "Imprisonment for 3 years, or fine, or both.")
+        self.assertEqual(doc["schedule_1"]["cognizable"], "Cognizable.")
+        self.assertEqual(doc["schedule_1"]["bailable"], "Non-bailable.")
+        self.assertEqual(doc["schedule_1"]["court"], "Any Magistrate.")
+        self.assertEqual(doc["rerank_score"], 1.1480)
+        self.assertIn("scoring_reasons", doc)
+
 
 if __name__ == "__main__":
     unittest.main()
