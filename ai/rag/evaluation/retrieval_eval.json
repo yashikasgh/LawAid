@@ -1,0 +1,58 @@
+[
+  {
+    "id": "q1",
+    "category": "core_retrieval",
+    "query": "Which court tries offences under Section 55?",
+    "expected_section": 55
+  },
+  {
+    "id": "q2",
+    "category": "core_retrieval",
+    "query": "Concealing design to commit offence",
+    "expected_section": 58
+  },
+  {
+    "id": "q3",
+    "category": "chunking_regression",
+    "query": "Is Section 58(b) bailable?",
+    "expected_section": 58,
+    "expected_clause": "58(b)",
+    "expected_answer_signal": "Bailable"
+  },
+  {
+    "id": "q4",
+    "category": "chunking_regression",
+    "query": "Is Section 64(2) bailable?",
+    "expected_section": 64,
+    "expected_clause": "64(2)",
+    "expected_answer_signal": "Non-bailable"
+  },
+  {
+    "id": "q5",
+    "category": "core_retrieval",
+    "query": "What is the punishment under Section 64(2)?",
+    "expected_section": 64,
+    "expected_clause": "64(2)"
+  },
+  {
+    "id": "q6",
+    "category": "core_retrieval",
+    "query": "What happened to the Indian Penal Code?",
+    "expected_section": 358
+  },
+  {
+    "id": "q7",
+    "category": "known_limitation",
+    "query": "What is the punishment for criminal conspiracy under Section 61(2)(a)?",
+    "expected_section": 61,
+    "expected_clause": "61(2)(a)",
+    "note": "Known cross-reference limitation: the punishment refers to the punishment for the offence that is the object of the conspiracy rather than providing a standalone punishment."
+  },
+  {
+    "id": "q8",
+    "category": "known_limitation",
+    "query": "Is Section 302 bailable?",
+    "expected_section": 103,
+    "note": "Known normalization limitation: IPC Section 302 corresponds to the murder provision, while BNS uses Section 103. Do not score this as ordinary vector-retrieval accuracy."
+  }
+]

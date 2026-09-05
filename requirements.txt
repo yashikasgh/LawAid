@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 alembic==1.18.5
 annotated-doc==0.0.4
 annotated-types==0.7.0
@@ -46,3 +47,11 @@ typing_extensions==4.16.0
 uvicorn==0.51.0
 watchfiles==1.2.0
 websockets==16.1
+=======
+chromadb>=0.4.0
+ollama>=0.1.0
+tqdm>=4.65.0
+docxtpl>=0.16.0
+python-docx>=1.0.0
+spacy>=3.5.0
+>>>>>>> origin/feature/bns-parser

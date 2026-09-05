@@ -43,6 +43,8 @@ def build_documents():
         title = sec["title"]
         chapter = sec["chapter"]
         legal_text = sec["text"]
+        if "STATEMENT OF OBJECTS AND REASONS" in legal_text:
+            legal_text = legal_text.split("STATEMENT OF OBJECTS AND REASONS")[0].rstrip()
         
         # Split fields by newline
         offence_lines = clean_lines(sec["offence"])
@@ -221,6 +223,16 @@ class TestDocumentBuilder(unittest.TestCase):
         self.assertEqual(len(sec_docs), 1)
         self.assertEqual(sec_docs[0]["metadata"]["clause"], "")
         self.assertEqual(sec_docs[0]["id"], "bns_302")
+
+    def test_section_358(self):
+        sec_docs = [d for d in self.docs if d["metadata"]["section"] == 358]
+        self.assertEqual(len(sec_docs), 1)
+        doc = sec_docs[0]
+        self.assertEqual(doc["id"], "bns_358")
+        doc_text = doc["text"]
+        self.assertNotIn("STATEMENT OF OBJECTS AND REASONS", doc_text)
+        self.assertIn("with regard to the effect of \nthe repeal.", doc_text)
+        self.assertEqual(len(self.docs), 536)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
