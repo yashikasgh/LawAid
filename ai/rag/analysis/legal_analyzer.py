@@ -18,6 +18,37 @@ if str(CURRENT_DIR) not in sys.path:
 from context_builder import build_legal_context
 
 
+LEGAL_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": ["success"]
+        },
+        "analysis": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string"},
+                    "applicability": {
+                        "type": "string",
+                        "enum": ["supported", "uncertain", "not_supported"]
+                    },
+                    "reasoning": {"type": "string"}
+                },
+                "required": ["document_id", "applicability", "reasoning"]
+            }
+        },
+        "limitations": {
+            "type": "array",
+            "items": {"type": "string"}
+        }
+    },
+    "required": ["status", "analysis", "limitations"]
+}
+
+
 class LLMClient:
     """Base interface for swappable LLM generation backends."""
     def generate(self, prompt: str) -> str:
@@ -25,7 +56,7 @@ class LLMClient:
 
 
 class OllamaLLMClient(LLMClient):
-    """Ollama-backed text generation client."""
+    """Ollama-backed text generation client using structured outputs."""
     def __init__(self, model_name: Optional[str] = None):
         self.model_name = model_name or os.environ.get("OLLAMA_LLM_MODEL")
 
@@ -41,7 +72,12 @@ class OllamaLLMClient(LLMClient):
             )
         import ollama
         try:
-            response = ollama.chat(model=self.model_name, messages=[{"role": "user", "content": prompt}])
+            response = ollama.chat(
+                model=self.model_name,
+                messages=[{"role": "user", "content": prompt}],
+                format=LEGAL_ANALYSIS_SCHEMA,
+                options={"temperature": 0}
+            )
             return response.get("message", {}).get("content", "")
         except Exception as e:
             raise RuntimeError(f"Ollama text generation failed for model '{self.model_name}': {e}")
@@ -63,42 +99,94 @@ class MockLLMClient(LLMClient):
         return "{}"
 
 
+class GroqLLMClient(LLMClient):
+    """Groq API text generation client adapter."""
+    def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
+        try:
+            from dotenv import load_dotenv
+            repo_root_env = CURRENT_DIR.parents[1] / ".env"
+            if repo_root_env.exists():
+                load_dotenv(dotenv_path=repo_root_env, override=False)
+            else:
+                load_dotenv(override=False)
+        except ImportError:
+            pass
+
+        self.api_key = api_key or os.environ.get("GROQ_API_KEY")
+        if not self.api_key:
+            raise ValueError("GROQ_API_KEY environment variable is missing.")
+
+        self.model_name = model_name or os.environ.get("GROQ_MODEL") or "openai/gpt-oss-120b"
+
+        try:
+            from groq import Groq
+            self.client = Groq(api_key=self.api_key)
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize Groq client: {e}")
+
+    def generate(self, prompt: str) -> str:
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                response_format={"type": "json_object"}
+            )
+            if response.choices and len(response.choices) > 0:
+                message = response.choices[0].message
+                return message.content if message and message.content else ""
+            return ""
+        except Exception as e:
+            raise RuntimeError(f"Groq API text generation failed for model '{self.model_name}': {e}")
+
+
 def construct_analysis_prompt(legal_context_obj: Dict[str, Any]) -> str:
-    """Construct a strict evidence-grounded prompt for structured JSON legal analysis."""
+    """Construct a strict, evidence-grounded system prompt for legal analysis."""
     incident = legal_context_obj.get("incident", {})
-    legal_context = legal_context_obj.get("legal_context", [])
+    raw_context = legal_context_obj.get("legal_context", [])
+
+    formatted_context_groups = []
+    for group in raw_context:
+        offence_type = group.get("offence_type", "")
+        query = group.get("query", "")
+        formatted_docs = []
+        for doc in group.get("results", []):
+            formatted_docs.append({
+                "rank": doc.get("rank"),
+                "id": doc.get("id"),
+                "section": doc.get("section"),
+                "clause": doc.get("clause"),
+                "title": doc.get("title"),
+                "target_clause_text": doc.get("target_clause_text", doc.get("text", "")),
+                "section_definition": doc.get("section_definition", ""),
+                "schedule_1": doc.get("schedule_1", {})
+            })
+        formatted_context_groups.append({
+            "offence_type": offence_type,
+            "query": query,
+            "results": formatted_docs
+        })
 
     prompt = (
-        "You are an expert legal analysis system for Indian Criminal Law (Bharatiya Nyaya Sanhita - BNS, 2023).\n"
-        "Analyze the provided incident facts and retrieved BNS legal provisions.\n\n"
-        "STRICT EVIDENCE AND SAFETY RULES:\n"
-        "1. Use ONLY the supplied incident facts and retrieved BNS context.\n"
-        "2. Do NOT invent BNS sections, punishments, or legal classifications.\n"
-        "3. Every proposed legal section MUST be grounded in retrieved evidence. Provide document_id, section, clause, and rank.\n"
-        "4. For punishment, bailable status, and cognizable status: state the value ONLY if explicitly present in retrieved context.\n"
-        "   If not explicitly present, write exactly 'not_available_in_retrieved_context'.\n"
-        "5. Output ONLY valid JSON matching the exact schema below, with no surrounding commentary or markdown code blocks.\n\n"
-        "JSON SCHEMA:\n"
+        "You are an expert legal analysis system for Indian criminal law (Bharatiya Nyaya Sanhita - BNS 2023).\n"
+        "Analyze the provided INCIDENT FACTS strictly using ONLY the RETRIEVED BNS LEGAL CONTEXT provided below.\n\n"
+        "STRICT GROUNDING & APPLICABILITY RULES:\n"
+        "1. For each candidate document in the RETRIEVED BNS LEGAL CONTEXT, evaluate whether it applies to the INCIDENT FACTS.\n"
+        "2. You MUST only reference candidate documents using their exact document_id string from the RETRIEVED BNS LEGAL CONTEXT.\n"
+        "3. Evaluate applicability strictly against the INCIDENT FACTS for EACH candidate document independently:\n"
+        "   - 'supported': Mark as 'supported' ONLY when ALL material elements, conditions, monetary/quantity thresholds, and qualifiers in the candidate document (including any specific Schedule I offence description, sub-clause, or monetary threshold like 'Where value of property is less than 5,000 rupees') are explicitly established by the INCIDENT FACTS.\n"
+        "   - 'uncertain': Mark as 'uncertain' if ANY material element, condition, monetary threshold, or qualifier in that specific candidate document (such as property value, monetary threshold like < 5,000 rupees, specific location, age, intent, or force level) is missing, unspecified, or unknown in the INCIDENT FACTS. You MUST NOT infer or assume missing facts, nor mark a candidate document as 'supported' if its specific monetary threshold or condition is unstated in the facts.\n"
+        "   - 'not_supported': Mark as 'not_supported' if the incident facts clearly contradict the provision or if the essential offence definition is inapplicable to the facts.\n"
+        "4. Provide a clear, factual reasoning string explaining why the provision is supported, uncertain due to missing factual conditions or unstated thresholds, or not supported.\n"
+        "5. Output ONLY valid JSON matching the exact schema below. Do NOT include markdown formatting or commentary outside the JSON.\n\n"
+        "JSON OUTPUT SCHEMA:\n"
         "{\n"
         '  "status": "success",\n'
         '  "analysis": [\n'
         "    {\n"
-        '      "offence_type": "string",\n'
-        '      "section": "string",\n'
-        '      "title": "string",\n'
-        '      "applicability": "supported|uncertain|not_supported",\n'
-        '      "reasoning": "string",\n'
-        '      "punishment": "string",\n'
-        '      "bailable": "string",\n'
-        '      "cognizable": "string",\n'
-        '      "evidence": [\n'
-        "        {\n"
-        '          "document_id": "string",\n'
-        '          "section": "string",\n'
-        '          "clause": "string",\n'
-        '          "rank": 1\n'
-        "        }\n"
-        "      ]\n"
+        '      "document_id": "string",\n'
+        '      "applicability": "supported | uncertain | not_supported",\n'
+        '      "reasoning": "string"\n'
         "    }\n"
         "  ],\n"
         '  "limitations": ["string"]\n'
@@ -106,7 +194,7 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any]) -> str:
         "INCIDENT FACTS:\n"
         f"{json.dumps(incident, indent=2)}\n\n"
         "RETRIEVED BNS LEGAL CONTEXT:\n"
-        f"{json.dumps(legal_context, indent=2)}\n"
+        f"{json.dumps(formatted_context_groups, indent=2)}\n"
     )
     return prompt
 
@@ -126,7 +214,7 @@ def _parse_json_from_llm(raw_text: str) -> Dict[str, Any]:
 
 
 def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate parsed LLM response ensuring all evidence references valid retrieved document IDs."""
+    """Validate parsed LLM response and attach deterministic legal metadata from retrieved corpus."""
     if not isinstance(parsed_data, dict) or "analysis" not in parsed_data:
         return {
             "status": "generation_failed",
@@ -134,12 +222,14 @@ def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj:
             "raw_llm_output": json.dumps(parsed_data)
         }
 
-    # Collect set of all actual document IDs present in retrieval results
-    actual_doc_ids = set()
+    # Map actual document ID -> (doc_object, group_offence_type)
+    doc_map = {}
     for group in legal_context_obj.get("legal_context", []):
+        group_offence = group.get("offence_type", "")
         for doc in group.get("results", []):
-            if doc.get("id"):
-                actual_doc_ids.add(doc["id"])
+            doc_id = doc.get("id")
+            if doc_id:
+                doc_map[doc_id] = (doc, group_offence)
 
     valid_analysis_items = []
     limitations = parsed_data.get("limitations", [])
@@ -150,29 +240,53 @@ def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj:
         if not isinstance(item, dict):
             continue
 
-        evidences = item.get("evidence", [])
-        if not isinstance(evidences, list):
-            evidences = []
-
-        valid_evidences = []
-        for ev in evidences:
-            if isinstance(ev, dict) and ev.get("document_id") in actual_doc_ids:
-                valid_evidences.append(ev)
-
-        if not valid_evidences:
-            section_name = item.get("section", "unknown")
+        doc_id = item.get("document_id")
+        if not doc_id or doc_id not in doc_map:
             limitations.append(
-                f"Rejected analysis item for section '{section_name}': evidence references document ID(s) "
+                f"Rejected analysis item for document_id '{doc_id}': evidence references document ID "
                 f"not found in actual retrieval results."
             )
-        else:
-            item["evidence"] = valid_evidences
-            # Enforce hallucination rule for missing legal properties
-            for prop in ["punishment", "bailable", "cognizable"]:
-                val = str(item.get(prop, "")).strip()
-                if not val or val in ["unknown", "n/a", "none"]:
-                    item[prop] = "not_available_in_retrieved_context"
-            valid_analysis_items.append(item)
+            continue
+
+        doc_info, group_offence = doc_map[doc_id]
+        sched_1 = doc_info.get("schedule_1", {})
+        if not isinstance(sched_1, dict):
+            sched_1 = {}
+
+        # Sourced deterministically from the validated retrieved BNS/BNSS corpus
+        offence_name = sched_1.get("offence") or group_offence or doc_info.get("title", "")
+        punishment_val = sched_1.get("punishment") or "not_available_in_retrieved_context"
+        bailable_val = sched_1.get("bailable") or "not_available_in_retrieved_context"
+        cognizable_val = sched_1.get("cognizable") or "not_available_in_retrieved_context"
+        court_val = sched_1.get("court") or "not_available_in_retrieved_context"
+
+        applicability = item.get("applicability", "supported")
+        if applicability not in ["supported", "uncertain", "not_supported"]:
+            applicability = "supported"
+
+        reasoning = item.get("reasoning", "")
+
+        grounded_item = {
+            "offence_type": offence_name,
+            "section": str(doc_info.get("section", "")),
+            "clause": doc_info.get("clause", ""),
+            "title": doc_info.get("title", ""),
+            "applicability": applicability,
+            "reasoning": reasoning,
+            "punishment": punishment_val,
+            "bailable": bailable_val,
+            "cognizable": cognizable_val,
+            "court": court_val,
+            "evidence": [
+                {
+                    "document_id": doc_id,
+                    "section": str(doc_info.get("section", "")),
+                    "clause": doc_info.get("clause", ""),
+                    "rank": doc_info.get("rank")
+                }
+            ]
+        }
+        valid_analysis_items.append(grounded_item)
 
     return {
         "status": "success",
