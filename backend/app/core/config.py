@@ -1,4 +1,9 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 class Settings(BaseSettings):
     POSTGRES_USER: str
@@ -12,6 +17,6 @@ class Settings(BaseSettings):
     JWT_SECRET: str
     JWT_EXPIRY_HOURS: int
 
-    model_config = SettingsConfigDict(env_file="../.env")
+    model_config = SettingsConfigDict(env_file=REPOSITORY_ROOT / ".env")
 
 settings = Settings()

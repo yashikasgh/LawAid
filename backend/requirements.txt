@@ -1,0 +1,14 @@
+alembic==1.18.5
+bcrypt==4.0.1
+email-validator==2.3.0
+fastapi==0.139.0
+httpx==0.28.1
+passlib==1.7.4
+psycopg2-binary==2.9.12
+pydantic-settings==2.14.2
+pymongo==4.17.0
+pytest==9.1.1
+python-jose==3.5.0
+python-multipart==0.0.32
+SQLAlchemy==2.0.51
+uvicorn==0.51.0
