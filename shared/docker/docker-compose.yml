@@ -43,10 +43,21 @@ services:
       REDIS_URL: redis://redis:6379
       JWT_SECRET: changeme
       JWT_EXPIRY_HOURS: 8
+      OLLAMA_HOST: http://ollama:11434
     depends_on:
       - postgres
       - mongo
       - redis
+      - ollama
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: lawaid-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
     restart: unless-stopped
 
   frontend:
@@ -77,3 +88,4 @@ services:
 volumes:
   postgres_data:
   mongo_data:
+  ollama_data:
