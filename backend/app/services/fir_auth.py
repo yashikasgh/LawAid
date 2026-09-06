@@ -18,6 +18,7 @@ def register_fir(
     officer_id: int,
     station_code: str,
     state: str = "MH",
+    complaint_text: str = None
 ) -> FIRRegistry:
     fir_id = generate_fir_id(state, station_code)
     sha256_hash = hash_document(file_bytes)
@@ -28,6 +29,7 @@ def register_fir(
         officer_id=officer_id,
         station_code=station_code,
         status="registered",
+        complaint_text=complaint_text
     )
     db.add(fir_record)
     db.commit()

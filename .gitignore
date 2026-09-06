@@ -2,8 +2,11 @@ venv/
 __pycache__/
 *.pyc
 .env
+.env.*
+!.env.example
 node_modules/
 .next/
 .DS_Store
 .vscode/
 .idea/
+ai/rag/data/chroma_db/

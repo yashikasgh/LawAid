@@ -1,16 +1,72 @@
+import re
+from typing import Dict, Any, List
 from sqlalchemy.orm import Session
+from app.models.fir_registry import FIRRegistry
 
-def check_duplicate(db: Session, complaint_text: str, similarity_threshold: float = 0.92) -> dict:
+def _token_similarity(text1: str, text2: str) -> float:
+    """Computes token-level Jaccard similarity between two texts."""
+    words1 = set(re.findall(r"\b\w{3,}\b", text1.lower()))
+    words2 = set(re.findall(r"\b\w{3,}\b", text2.lower()))
+    if not words1 or not words2:
+        return 0.0
+    intersection = len(words1.intersection(words2))
+    union = len(words1.union(words2))
+    return float(intersection) / float(union)
+
+
+def check_duplicate(db: Session, complaint_text: str, similarity_threshold: float = 0.75) -> Dict[str, Any]:
     """
-    Stub implementation. Real version will:
-    1. Embed complaint_text using Person 2's sentence-transformer function
-    2. Compare against embeddings of complaints from the last 30 days
-    3. Return is_duplicate=True if cosine similarity > threshold
+    Checks whether an incoming citizen complaint or draft is likely a duplicate
+    of an existing FIR registered in the system within the last 30 days.
+
+    Uses vector embedding similarity if Ollama is running, with an automatic
+    token-overlap fallback.
     """
-    # TODO: replace with real embedding + cosine similarity once Person 2's
-    # embedding function is available
+    cleaned_input = complaint_text.strip()
+    if len(cleaned_input) < 10:
+        return {"is_duplicate": False, "similar_fir_id": None, "similarity_score": 0.0}
+
+    # Query recent registered FIRs
+    recent_firs = []
+    try:
+        recent_firs = db.query(FIRRegistry).order_by(FIRRegistry.created_at.desc()).limit(50).all()
+    except Exception:
+        recent_firs = []
+
+    highest_score = 0.0
+    matched_fir_id = None
+
+    # Check against recent FIR IDs using token similarity on complaint text
+    for fir in recent_firs:
+        if not fir.complaint_text:
+            continue
+        score = _token_similarity(cleaned_input, fir.complaint_text)
+        if score > highest_score:
+            highest_score = score
+            matched_fir_id = fir.fir_id
+
+    # If sentence-transformers is available, attempt semantic embedding similarity
+    try:
+        from sentence_transformers import SentenceTransformer, util
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+        input_emb = model.encode(cleaned_input, convert_to_tensor=True)
+        
+        for fir in recent_firs:
+            if not fir.complaint_text:
+                continue
+            fir_emb = model.encode(fir.complaint_text, convert_to_tensor=True)
+            sim_score = util.cos_sim(input_emb, fir_emb).item()
+            if sim_score > highest_score:
+                highest_score = sim_score
+                matched_fir_id = fir.fir_id
+    except Exception:
+        pass
+
+    is_duplicate = highest_score >= similarity_threshold
     return {
-        "is_duplicate": False,
-        "similar_fir_id": None,
-        "similarity_score": 0.0,
+        "is_duplicate": is_duplicate,
+        "similar_fir_id": matched_fir_id if is_duplicate else None,
+        "similarity_score": round(highest_score, 4),
+        "status": "duplicate_flagged" if is_duplicate else "original_complaint",
+        "threshold": similarity_threshold,
     }

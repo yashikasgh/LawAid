@@ -41,23 +41,12 @@ export const firAPI = {
   generate: (complaint: string) =>
     api.post('/fir/generate', { complaint }),
 
-  // NOTE: /fir/understand doesn't exist on the backend yet. This calls
-  // /fir/upload (which does exist) and mocks the explanation shape so
-  // the UI still works. Swap out once backend adds the real endpoint.
   understand: async (file: File) => {
     const form = new FormData()
     form.append('file', file)
-    const uploadRes = await api.post('/fir/upload', form, {
+    return api.post('/fir/understand', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
-    return {
-      data: {
-        file_id: uploadRes.data.file_id,
-        explanation:
-          'SUMMARY: This is placeholder text — /fir/understand is not built yet on the backend.\nCHARGES: —',
-        _mocked: true,
-      },
-    }
   },
 
   verify: (firId: string, file: File) => {
@@ -72,11 +61,13 @@ export const firAPI = {
     api.post('/fir/check-duplicate', { complaint_text: complaintText }),
 }
 
-// ── BNS Search ───────────────────────────────────────────────
-// NOTE: actual backend route is /fir/bns/search?query=... (not /bns/search?q=...)
+// ── BNS Search & Legal Analysis ─────────────────────────────
 export const bnsAPI = {
   search: (query: string) =>
     api.get(`/fir/bns/search?query=${encodeURIComponent(query)}`),
+
+  analyze: (incident: string) =>
+    api.post('/fir/analyze', { incident }),
 }
 
 // ── Chat ─────────────────────────────────────────────────────

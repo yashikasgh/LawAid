@@ -1,0 +1,843 @@
+LawAid
+AI-Powered Legal Assistance Platform
+COMPREHENSIVE EXECUTION PLAN
+Feature Guide · Tech Stack · Team Division · 14-Week Roadmap
+Document Type
+Technical Execution Plan
+Modules Covered
+Citizen · Police Officer · Lawyer · AI/RAG Layer
+Team Size
+3 Members
+Timeline
+14 Weeks
+Tech Stack
+Next.js · FastAPI · Llama 3.1 · LangChain · RAG
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 2
+1. Project Overview
+LawAid is a privacy-first AI legal platform that bridges the gap between citizens, police officers, and legal
+professionals. India's 2023 transition from IPC to BNS (Bharatiya Nyaya Sanhita) created mass confusion —
+FIRs are being filed with wrong sections, victims cannot understand legal documents, and legal guidance
+remains inaccessible. LawAid solves this using a locally-hosted LLM (Llama 3.1 via Ollama) combined with
+Retrieval-Augmented Generation (RAG) over the full BNS corpus.
+Citizens / Victims
+File complaints, understand FIRs, get plain-language legal guidance and next steps
+Police Officers
+Intake victim statements via voice or text, validate BNS sections, generate and authenticate
+FIRs
+Lawyers
+Analyse case documents, build timelines, research precedents, draft petitions
+Legal Aid Orgs
+Access dashboards, manage multiple citizen cases, generate bulk reports
+All AI processing runs locally via Ollama — no data leaves the server. This is critical for police stations handling
+sensitive victim information.
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 3
+2. Citizen Module — Feature Execution
+2A. File a Complaint & Get Guidance
+The citizen describes an incident in natural language. The system extracts facts, recommends applicable BNS
+sections, explains them simply, and suggests concrete next steps — it does NOT generate the FIR (that is the
+police's role). This keeps legal responsibility correctly placed.
+1
+Complaint Input
+User types or pastes their incident description in any language (Hindi, English, Marathi, etc.). The
+interface is a simple chat — no forms, no legal knowledge required.
+Tech: Next.js chat UI · FastAPI /complaint endpoint · IndicTrans2 for non-English inputs
+2
+Text Preprocessing
+Raw input is cleaned — noise removed, language detected, translated to English if needed. Spell
+correction applied for informal writing.
+Tech: LangChain text splitter · IndicBERT language detection · IndicTrans2 translation
+3
+Named Entity Recognition (NER)
+AI extracts structured facts: time, location, parties involved, type of offence, objects (weapon,
+vehicle, money), and relationship between parties.
+Tech: spaCy NER + custom legal entity model · LangChain extraction chain · Llama 3.1
+4
+BNS Section Retrieval via RAG
+Extracted entities become a semantic query. The vector database (pre-loaded with all BNS
+sections) returns the top-K most relevant sections ranked by similarity score.
+Tech: ChromaDB vector store · sentence-transformers/all-MiniLM-L6-v2 embeddings · BM25 hybrid search
+5
+Cross-Encoder Reranking
+A reranker model re-scores the retrieved sections for precision before presenting to the user. This
+eliminates false positives — a critical step for legal accuracy.
+Tech: cross-encoder/ms-marco-MiniLM-L12-v2 · LangChain reranker wrapper
+6
+Plain-Language Explanation
+Llama 3.1 receives the top sections + extracted facts and generates a citizen-friendly explanation
+of what each section means in their context.
+Tech: Ollama / Llama 3.1 · LangChain prompt template · FastAPI streaming response
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 4
+7
+Next Steps & Action Guidance
+The system presents a clear action plan: which police station to visit, free legal aid contacts
+(DLSA), helpline numbers (112/1091), what documents to carry, and what to expect.
+Tech: Template-based response engine · PostgreSQL legal aid directory · FastAPI response
+2B. Understand an Existing FIR
+A citizen uploads a scanned FIR image or PDF. The system extracts text, identifies legal sections, explains each
+one in plain language, and informs the citizen of their rights and what they can do next.
+1
+Document Upload
+Citizen uploads a photo, scan, or PDF of their FIR through the web or mobile interface. File size
+and format are validated immediately.
+Tech: Next.js file upload component · FastAPI multipart endpoint · MongoDB GridFS for storage
+2
+OCR Extraction
+The uploaded image or PDF is passed through OCR to extract all textual content. For typed FIRs,
+EasyOCR handles the primary extraction.
+Tech: EasyOCR (primary) · PyMuPDF for PDFs · TrOCR for handwritten FIRs (future improvement)
+3
+Section Detection
+Regex + NLP patterns identify BNS/IPC section numbers within the extracted text. The system
+maps old IPC references to their BNS equivalents automatically.
+Tech: SpaCy pattern matching · Custom regex · IPC-to-BNS mapping table in PostgreSQL
+4
+RAG Retrieval for Each Section
+For each detected section number, the system retrieves the full legal text and explanation from the
+vector database.
+Tech: ChromaDB · Direct section ID lookup + semantic fallback · LangChain retrieval chain
+5
+Plain-Language Summary
+Llama 3.1 generates a citizen-friendly summary of the entire FIR — what the charges mean,
+severity level, and what the complainant should expect.
+Tech: Ollama / Llama 3.1 · Structured prompt template · LangChain output parser
+6
+Rights & Next Steps
+The system displays a rights card: right to FIR copy (zero cost), right to legal representation, bail
+eligibility, free legal aid access, and escalation options.
+Tech: Template-based rights engine · DLSA directory API · FastAPI response
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 5
+3. Police Officer Module — Feature Execution
+The police module is the most critical flow in LawAid. A victim walks in, narrates their incident (in any language,
+via voice or text), and the system guides the constable through section validation, FIR generation, and secure
+authentication — reducing both drafting errors and the IPC-to-BNS conversion mistakes that are rampant
+post-2023.
+1
+Login & Role Verification
+The constable logs into LawAid using their badge number and password. JWT token issued.
+Role-based access ensures constables only see complaint intake while senior officers see full FIR
+management.
+Tech: FastAPI JWT auth · PostgreSQL user/role tables · bcrypt password hashing
+2
+Victim Statement Intake — Voice or Text
+The constable opens a new complaint. The victim can either speak directly into a microphone
+(speech-to-text) or the constable types as the victim narrates. Supports Hindi, Marathi, English, and
+all major Indian languages.
+Tech: OpenAI Whisper (local deployment via faster-whisper) · IndicASR as fallback · React mic API · FastAPI
+WebSocket for streaming
+3
+AI Extracts Key Facts from Statement
+The transcribed or typed statement is processed by an NER pipeline that extracts: complainant
+name, accused details, date/time, location, offence type, financial amounts, weapons/vehicles
+used, and witness information.
+Tech: spaCy + custom legal NER model · LangChain extraction chain · Llama 3.1 for complex extractions ·
+FastAPI structured response
+4
+BNS Sections Suggested + Explained
+Based on extracted facts, the RAG engine retrieves the most relevant BNS sections. Each section
+is displayed with: the section number, its legal title, a plain-language explanation of why it applies to
+this specific incident, and the applicable punishment range.
+Tech: ChromaDB hybrid search · cross-encoder reranker · Llama 3.1 for contextual explanation · LangChain
+RAG chain
+5
+Constable Reviews & Validates Sections
+The constable sees each recommended section with full explanation. They can accept, reject, or
+add sections manually. This keeps human judgment in the loop — the system assists but never
+decides.
+Tech: Next.js review UI with accept/reject controls · FastAPI PATCH /draft endpoint · Section audit trail in
+MongoDB
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 6
+6
+FIR Draft Generation & Constable Confirmation
+Using the validated sections and extracted facts, Llama 3.1 generates a complete, formatted FIR
+draft. The constable reviews the full draft, can edit any field, and then formally confirms it. A senior
+officer digital signature can optionally be required.
+Tech: Llama 3.1 + structured FIR prompt template · PyMuPDF for PDF generation · React editable draft view ·
+FastAPI PUT /fir/confirm
+7
+Unique FIR ID + Digital Authentication + Audit Log
+On confirmation: a unique FIR ID (format: FIR/STATE/YEAR/STATION/SERIAL) is assigned.
+SHA-256 hash of the document is computed and stored. Timestamp, officer ID, and station details
+are locked. Any future edit creates a new version with the edit logged. Full immutable audit trail
+maintained.
+Tech: UUID + sequential ID generator · Python hashlib SHA-256 · PostgreSQL audit_logs table · MongoDB for
+FIR versions · PDF stamped with QR code linking to verification endpoint
+FIR ID Format
+Each FIR receives a structured unique identifier that encodes all key metadata:
+FIR / MH / 2026 / PS001 / 04821
+Type State Year Station Code Serial No.
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 7
+4. Lawyer Module — Feature Execution
+Lawyers upload case documents and use LawAid as an intelligent research and drafting assistant. The system
+builds case timelines, surfaces relevant legal precedents, and assists in drafting petitions — compressing hours
+of manual work into minutes.
+1
+Document Upload & Parsing
+Lawyer uploads multiple documents at once: FIRs, charge sheets, witness statements, evidence
+files (PDF, images, DOCX). The system queues and processes them in parallel.
+Tech: Next.js multi-file upload · FastAPI background tasks · PyMuPDF + PDFPlumber for parsing · MongoDB
+GridFS for storage
+2
+AI Fact Extraction & Case Timeline
+The system reads all documents and extracts dated events, parties, locations, financial figures, and
+key facts. These are arranged into a chronological case timeline automatically.
+Tech: LangChain document chain · Llama 3.1 timeline extraction · spaCy date/entity NER · React timeline
+component
+3
+Legal Precedent Research via RAG
+The extracted facts are used to query a vector database loaded with Supreme Court and High
+Court judgements. The system surfaces the most factually similar cases with their outcomes.
+Tech: ChromaDB · Sentence Transformers · Legal judgement dataset (IndianKanoon corpus) · Cross-encoder
+reranker
+4
+AI-Assisted Petition Drafting
+The lawyer uses a guided drafting interface. Llama 3.1 auto-inserts relevant BNS sections, case
+citations, and argument structures based on the case facts.
+Tech: Llama 3.1 · LangChain drafting chain · React rich text editor · Auto-citation from RAG results
+5
+Case Summary & Export
+A complete case package is generated: executive summary, full timeline, charges, precedents, and
+draft petition. Exported as a structured, printable PDF.
+Tech: ReportLab PDF generation · PyMuPDF · FastAPI /export endpoint · SHA-256 document hash
+5. AI & Infrastructure Layer
+5A. RAG Pipeline — How It Works
+Step 1: Indexing (one-time): All BNS sections, legal acts, and case law are converted to embeddings using
+sentence-transformers and stored in ChromaDB with metadata (section number, chapter, act name).
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 8
+Step 2: Query Processing: User query → language detection → translation if needed → semantic embedding
+generated.
+Step 3: Hybrid Retrieval: Semantic search (vector similarity) + BM25 keyword search run in parallel. Results
+merged and deduplicated.
+Step 4: Reranking: Cross-encoder model re-scores top-20 results → top-5 selected. This is the critical quality
+step.
+Step 5: Context Assembly: Retrieved sections assembled into a structured context block with metadata and
+passed to Llama 3.1.
+Step 6: Generation + Citation: Llama 3.1 generates response grounded in retrieved context. Response
+includes section citations. Confidence score computed.
+Step 7: Guardrail Check: If confidence < threshold, system adds a disclaimer. Never fabricates section
+numbers.
+5B. Speech-to-Text Pipeline (Police Module)
+Input
+Victim speaks in Hindi/Marathi/English into mic on constable's device
+STT Engine
+faster-whisper (local) transcribes in real time via WebSocket
+Language ID
+IndicBERT detects language; IndicTrans2 translates to English if needed
+Output
+Clean English transcription + original language transcript both stored
+Fallback
+Constable can type manually; both modes produce identical downstream output
+5C. Security Architecture
+JWT Auth
+Issued on login, 8-hour expiry, refresh token stored in HttpOnly cookie
+RBAC
+4 roles: Citizen, Constable, Officer, Lawyer — each with scoped API permissions
+Document Hash
+SHA-256 of every generated FIR stored in PostgreSQL. Any edit detected by hash mismatch.
+Audit Log
+Every action (login, view, edit, confirm, download) logged with user ID + timestamp + IP.
+Encryption
+Sensitive fields (Aadhaar, phone) encrypted at rest with AES-256. Passwords hashed with
+bcrypt.
+DPDPA 2023
+Data minimisation, explicit consent on complaint submission, right to erasure endpoint built
+in.
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 9
+6. Tech Stack — Feature-by-Feature Mapping
+Feature / Module
+Technology
+Why This Choice
+Web Frontend
+Next.js 14 + TypeScript +
+Tailwind CSS
+Server-side rendering improves SEO and initial
+load; TypeScript prevents runtime errors in a
+complex multi-role app
+UI Components
+shadcn/ui + Radix UI
+Accessible, unstyled components that match
+the legal platform's professional design
+requirements
+API Backend
+FastAPI (Python)
+Async-first, auto-generates OpenAPI docs,
+native Pydantic validation — ideal for AI
+payload handling
+LLM Runtime
+Ollama + Llama 3.1 8B/70B
+Fully local execution — no data leaves the
+server. 8B for fast responses, 70B for complex
+legal drafting
+Agent Orchestration
+LangChain + LangGraph
+LangGraph handles stateful multi-step agent
+flows (intake → extract → retrieve → generate
+→ validate)
+Speech-to-Text
+faster-whisper (local)
+Whisper-based, runs offline, supports all Indian
+languages, real-time via WebSocket streaming
+Multilingual NLP
+IndicBERT + IndicTrans2
+Purpose-built for Indian languages — far
+superior to general multilingual models for
+Hindi/Marathi legal text
+Embeddings
+sentence-transformers/all-MiniL
+M-L6-v2
+Lightweight, fast, and accurate for semantic
+similarity on legal text
+Vector Database
+ChromaDB
+Persistent storage, metadata filtering by section
+number/act/chapter — better than FAISS for
+this use case
+Hybrid Search
+ChromaDB semantic + BM25
+(rank_bm25)
+Legal queries benefit from exact keyword
+matching (section numbers) AND semantic
+understanding
+Reranker
+cross-encoder/ms-marco-MiniL
+M-L12-v2
+Critical precision layer — prevents false positive
+section recommendations
+OCR — Typed
+EasyOCR
+Strong on printed text, supports Hindi script,
+easy Python integration
+OCR — Handwritten
+TrOCR (Microsoft)
+Transformer-based, handles handwritten FIRs
+which EasyOCR fails on
+OCR — PDFs
+PyMuPDF + PDFPlumber
+PDFPlumber for structured extraction,
+PyMuPDF for image-heavy PDFs
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 10
+Primary DB
+PostgreSQL
+Users, roles, audit logs, sessions, IPC→BNS
+mapping tables, legal aid directory
+Document Store
+MongoDB
+FIR drafts, uploaded docs, chat history,
+generated reports — flexible schema for varied
+doc structures
+Cache
+Redis
+Cache repeated BNS section lookups, rate
+limiting, session storage — prevents redundant
+LLM calls
+PDF Generation
+ReportLab
+Professional, programmatic PDF generation for
+FIR documents with stamps, QR codes, and
+hashes
+Authentication
+FastAPI-JWT + bcrypt
+JWT for stateless auth, bcrypt for password
+hashing (cost factor 12)
+Containerisation
+Docker + Docker Compose
+Isolates each service (backend, Ollama,
+ChromaDB, Redis, PostgreSQL, MongoDB) for
+easy deployment
+Reverse Proxy
+Nginx
+SSL termination, static file serving, rate limiting,
+WebSocket proxy for STT
+Deployment
+Linux server (Ubuntu 22.04)
+Ollama requires direct GPU/CPU access — no
+serverless; dedicated server is the correct
+architecture
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 11
+7. Recommended Improvements to Existing Plan
+The following improvements are recommended over the original PRD/TRD. High priority items should be
+incorporated before development begins.
+Area
+Current Gap
+Recommended Fix
+Priority
+LLM Hallucination
+No guardrail if RAG returns
+low-confidence results — LLM
+will still generate a section
+recommendation
+Add confidence threshold: if top RAG result
+similarity < 0.72, return 'Insufficient
+information' instead of generating. Never
+fabricate section numbers.
+High
+Vector DB Choice
+TRD says FAISS, architecture
+diagram says ChromaDB —
+contradiction
+Standardise on ChromaDB. It's persistent,
+supports metadata filtering, and handles
+concurrent reads — FAISS does not.
+High
+OCR Gap
+No plan for handwritten FIRs —
+EasyOCR fails on handwriting
+Add TrOCR as a second OCR engine
+specifically for handwritten documents.
+Auto-detect handwriting vs print before
+routing.
+High
+Speech-to-Text
+Not included in original TRD
+despite being core to police
+module
+Add faster-whisper (local Whisper) with
+WebSocket streaming. This is the key feature
+that makes the police module practical.
+High
+Multilingual Gap
+Llama 3.1 has weak Indic
+language support
+Use IndicBERT for language detection +
+IndicTrans2 for translation. Process in
+English, translate output back. Don't rely on
+LLM for Indic language handling.
+High
+Reranker Missing
+RAG pipeline has no reranking
+step — top-K results may include
+false positives
+Add cross-encoder reranker after initial
+retrieval. This single step can improve BNS
+retrieval precision from ~75% to ~90%+.
+High
+Timeline Structure
+Frontend development in Week
+12 — no UI during months of
+backend/AI work
+Start frontend in Week 5 alongside backend.
+Define OpenAPI spec first, use mock data in
+frontend while backend is built in parallel.
+High
+No Benchmark
+Dataset
+Success metric 'FIR accuracy >
+85%' has no measurement
+method defined
+Before Week 1 ends, create a labelled dataset
+of 200 complaint descriptions → correct BNS
+sections (validated by a law student or
+lawyer). This is the test set.
+High
+DPDPA
+Compliance
+India's Data Protection Act 2023
+applies — not mentioned
+anywhere in PRD
+Add consent flow on complaint submission,
+data retention policies, right-to-erasure API
+endpoint, and privacy notice.
+Medium
+Redis Cache
+No caching layer — every
+repeated BNS query hits the LLM
+Add Redis. Cache BNS section lookups (TTL:
+24 hours) and section explanations. Reduces
+LLM load by ~40% under real usage.
+Medium
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 12
+No Feedback Loop
+No mechanism for correcting
+wrong AI outputs
+post-deployment
+Add thumbs up/down on every AI output.
+Wrong outputs go to a review queue.
+Approved corrections added to RAG
+knowledge base.
+Medium
+No UAT Phase
+Testing week covers security and
+performance but not user testing
+Add a User Acceptance Testing phase (Week
+13 alongside security). Test with real citizens
+and a police constable if possible.
+Medium
+Legal Aid Org
+Module
+Listed as a target user but has no
+corresponding feature module
+Either build a minimal Legal Aid Org
+dashboard (case overview, bulk FIR analysis)
+or remove from target users in the PRD.
+Low
+Hybrid Search
+RAG uses only semantic search
+— fails on exact section number
+queries
+Combine ChromaDB semantic search with
+BM25 keyword search. Legal queries mix
+exact terms ('Section 318') and semantic
+('cheating fraud').
+Medium
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 13
+8. Work Division — 3-Person Team
+The team is divided by skill domain while ensuring each person owns complete, deployable vertical slices. All
+three collaborate on integration milestones at Weeks 6, 10, and 13.
+Person 1 · Backend Engineer + AI/ML Lead
+Week 1–2
+BNS dataset collection, corpus cleaning, IPC→BNS mapping table. Architecture design +
+OpenAPI spec.
+Week 3–4
+FastAPI backend setup, JWT auth, PostgreSQL + MongoDB schema, all API routes (stubs).
+Week 5–6
+ChromaDB setup, BNS embedding pipeline, hybrid RAG chain (semantic + BM25), section
+indexing.
+Week 7–8
+Cross-encoder reranker integration. Citizen complaint flow: NER extraction, RAG chain,
+action guidance endpoint.
+Week 9–10
+Police module backend: faster-whisper STT WebSocket, entity extraction pipeline, section
+suggestion API.
+Week 11
+FIR generation engine: Llama 3.1 prompt templates, structured output parser, PDF
+generation (ReportLab).
+Week 12
+FIR authentication: SHA-256 hashing, unique ID generator, audit log system, version
+control.
+Week 13
+Performance testing: load testing with Locust, response time optimisation, Redis caching
+layer.
+Week 14
+API documentation, deployment support, demo preparation, code review.
+Person 2 · Frontend Engineer + Integration Lead
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 14
+Week 1–2
+UI/UX wireframes for all 10 screens. Component library setup (Next.js + shadcn/ui +
+Tailwind).
+Week 3–4
+Authentication screens (login, registration, role-based routing). Base layout, navigation,
+dashboard shells.
+Week 5–6
+Citizen module UI: chat interface, complaint input, BNS section display cards, action
+guidance screen.
+Week 7–8
+FIR upload screen, OCR result display, plain-language explanation view, rights panel.
+Week 9–10
+Police module UI: voice recording component (mic API), live transcription display, section
+review/accept/reject UI.
+Week 11
+FIR draft editor, validation screen, confirmation flow, unique FIR ID display with QR code.
+Week 12
+Lawyer module UI: multi-file upload, timeline view, precedent cards, petition draft editor.
+Week 13
+UAT — test all flows with real users, fix UX issues, mobile responsiveness audit,
+accessibility check.
+Week 14
+User manual, demo video recording, final UI polish, deployment to Nginx.
+Person 3 · DevOps + Data Engineer + QA Lead
+Week 1–2
+Server setup (Ubuntu 22.04), Docker + Docker Compose config for all services, Ollama
+installation + Llama 3.1 pull.
+Week 3–4
+PostgreSQL + MongoDB + Redis Docker containers, DB migrations (Alembic), backup
+scripts, secret management.
+Week 5–6
+BNS dataset pipeline: web scraping / PDF parsing of BNS text, cleaning scripts, ingestion
+into ChromaDB.
+Week 7–8
+OCR pipeline setup: EasyOCR + TrOCR Docker service, test with sample FIR images,
+accuracy benchmarking.
+Week 9–10
+Legal judgement dataset collection (IndianKanoon), cleaning, embedding, ChromaDB
+indexing for lawyer module RAG.
+Week 11
+Benchmark dataset (200 complaint → BNS section labels), accuracy evaluation script for
+RAG + LLM pipeline.
+Week 12
+Security testing: JWT validation, RBAC bypass attempts, SQL injection tests, DPDPA
+compliance checklist.
+Week 13
+Nginx config, SSL setup, Docker production build, CI pipeline (GitHub Actions), monitoring
+(Prometheus + Grafana).
+Week 14
+Deployment documentation, system architecture diagram (final), project report, API docs
+export.
+Collaboration Points
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 15
+End of Week 6
+Integration checkpoint 1: Auth + basic frontend + RAG pipeline all talking to each other. First
+end-to-end citizen complaint flow tested.
+End of Week
+10
+Integration checkpoint 2: Full police module working end-to-end (voice → FIR draft). Benchmark
+accuracy measured against test dataset.
+End of Week
+13
+Integration checkpoint 3: All modules complete. Security audit done. UAT completed. Performance
+targets verified.
+Week 14
+Final demo preparation, documentation review, deployment to production server.
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 16
+9. 14-Week Execution Plan
+The timeline runs frontend and backend in parallel from Week 5 onward (improvement over original plan where
+frontend started Week 12). Integration checkpoints at Weeks 6, 10, and 13 ensure alignment. Critical path: BNS
+dataset → RAG pipeline → police STT → FIR generation.
+Week
+Person 1 — Backend/AI
+Person 2 — Frontend
+Person 3 — DevOps/Data
+Milestone
+1–2
+BNS dataset collection,
+IPC→BNS mapping, corpus
+cleaning. Architecture
+design, OpenAPI spec.
+UI wireframes (all 10
+screens). Component
+library and design system
+setup.
+Server setup, Docker
+Compose, Ollama + Llama
+3.1 install, DB containers.
+Architecture locked.
+Spec agreed.
+3–4
+FastAPI backend, JWT
+auth, RBAC, all API stubs.
+PostgreSQL + MongoDB
+schemas.
+Auth screens,
+login/registration,
+role-based routing, base
+layouts.
+DB migrations (Alembic),
+Redis setup, backup
+scripts, secrets manager.
+Auth working
+end-to-end.
+5–6
+ChromaDB BNS indexing,
+hybrid RAG chain,
+cross-encoder reranker.
+Citizen complaint UI, chat
+interface, BNS section
+display cards.
+BNS text scraping/parsing
+pipeline, ChromaDB
+ingestion, index validation.
+I Checkpoint 1:
+Citizen complaint flow.
+7–8
+Citizen complaint API
+complete: NER, RAG,
+action guidance. FIR
+upload + OCR API.
+FIR upload screen, OCR
+result display,
+plain-language explanation
+view.
+EasyOCR + TrOCR Docker
+service, OCR accuracy
+tests on sample FIRs.
+OCR pipeline live.
+Citizen flow complete.
+9–10
+Police module:
+faster-whisper STT
+WebSocket, entity
+extraction, section
+suggestion API.
+Police UI: mic component,
+live transcription, section
+accept/reject UI.
+Legal judgement dataset
+(IndianKanoon), cleaning,
+lawyer RAG indexing.
+I Checkpoint 2:
+Police voice→FIR
+flow.
+11
+FIR generation: Llama 3.1
+templates, PDF output.
+Lawyer module: timeline,
+precedent search.
+FIR draft editor,
+validation/confirm screens.
+Lawyer: timeline +
+precedent UI.
+Benchmark accuracy eval
+(200-case test set).
+Accuracy report produced.
+All 3 modules
+feature-complete.
+12
+FIR authentication:
+SHA-256, unique ID, audit
+log, version control. Redis
+caching.
+Lawyer petition editor,
+export flow. Final UI polish
+across all modules.
+Security audit: JWT, RBAC,
+injection tests, DPDPA
+compliance checklist.
+Security signed off.
+13
+Load testing (Locust),
+response time fixes,
+performance targets
+verified.
+UAT with real users. Mobile
+responsiveness.
+Accessibility audit. UX
+fixes.
+Nginx + SSL config,
+production Docker build, CI
+pipeline (GitHub Actions).
+I Checkpoint 3:
+Production-ready.
+14
+Code review, API
+documentation, demo prep,
+final bug fixes.
+User manual, demo video
+recording, final frontend
+deploy.
+Deployment docs,
+architecture diagram,
+project report, monitoring
+setup.
+I Final Demo &
+Submission.
+
+---PAGE---
+LawAid
+Feature Guide · Tech Stack · Team Plan · Roadmap
+AI-Powered Legal Assistance Platform  ·  Confidential
+Page 17
+Critical Path
+The following tasks are on the critical path — delays here delay the entire project:
+• Week 1–2: BNS dataset ready and cleaned (all RAG work depends on this)
+• Week 5–6: RAG pipeline + ChromaDB working (blocks all AI features)
+• Week 9–10: faster-whisper STT integrated (blocks police module)
+• Week 11: FIR generation engine (core deliverable of the project)
+• Week 13: Benchmark accuracy ≥ 85% achieved (success metric)
+10. Success Metrics & Validation
+Metric
+Target
+How to Measure
+Measure By
+FIR Section Accuracy
+> 85%
+200-case benchmark dataset (complaint → correct BNS
+section). Human-validated labels.
+Week 11
+BNS Retrieval Precision
+> 90%
+Top-5 RAG retrieval precision on 100-query test set.
+Measured after reranker.
+Week 8
+FIR Generation Time
+< 10 sec
+End-to-end: statement input → PDF ready. Measured with
+Locust load tests.
+Week 13
+API Response Time
+< 3 sec
+All non-LLM endpoints < 1s. LLM endpoints < 3s at 50
+concurrent users.
+Week 13
+OCR Accuracy — Typed
+> 95%
+Character error rate on 50 sample typed FIR images.
+Week 8
+Speech-to-Text Accuracy
+> 85%
+Word error rate on 30 Hindi/Marathi/English test
+utterances.
+Week 10
+User Satisfaction
+> 80%
+UAT survey with 5+ real users (citizens and constables)
+rating clarity and ease of use.
+Week 13
+Zero Hallucinated
+Sections
+100%
+Every section number in any output must exist in BNS.
+Automated validator runs post-generation.
+Week 11
