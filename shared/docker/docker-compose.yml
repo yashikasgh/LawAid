@@ -4,12 +4,13 @@ services:
     container_name: lawaid-postgres
     environment:
       POSTGRES_USER: lawaid
-      POSTGRES_PASSWORD: lawaid123
+      POSTGRES_PASSWORD: changeme
       POSTGRES_DB: lawaid
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
 
   mongo:
     image: mongo:7
@@ -18,12 +19,58 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+    restart: unless-stopped
 
   redis:
     image: redis:7
     container_name: lawaid-redis
     ports:
       - "6379:6379"
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../../
+      dockerfile: backend/Dockerfile
+    container_name: lawaid-backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://lawaid:changeme@postgres:5432/lawaid
+      MONGO_URL: mongodb://mongo:27017/lawaid
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: changeme
+      JWT_EXPIRY_HOURS: 8
+    depends_on:
+      - postgres
+      - mongo
+      - redis
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+    container_name: lawaid-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: lawaid-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
 
 volumes:
   postgres_data:

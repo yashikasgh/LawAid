@@ -27,6 +27,48 @@ Response: { "id": "uuid", "email": "string", "role": "string" }
 
 ---
 
+## Legal Incident Analysis (AI RAG Pipeline)
+
+### POST /fir/analyze
+Citizens submit their raw incident description. The backend passes it to `run_pipeline()`, which executes Privacy Sanitization -> NER -> Query Generation -> ChromaDB Vector Retrieval -> Reranking -> LLM Grounded Analysis (Groq GPT-OSS 120B).
+
+```json
+Request:
+{
+  "incident": "The accused entered the shop and took a mobile phone without permission."
+}
+
+Response (success):
+{
+  "status": "ok",
+  "source": "pipeline | retrieval_fallback | mock",
+  "data": {
+    "status": "success",
+    "sanitized_incident": "The accused entered the shop and took a mobile phone without permission.",
+    "privacy_metadata": { "detections": [], "replacement_map": {} },
+    "analysis": [
+      {
+        "offence_type": "Theft",
+        "section": "303",
+        "clause": "2",
+        "title": "Theft",
+        "applicability": "supported | uncertain | not_supported",
+        "reasoning": "The accused took movable property dishonestly out of possession without consent.",
+        "punishment": "Imprisonment up to 3 years, or fine, or both.",
+        "bailable": "Non-bailable",
+        "cognizable": "Cognizable",
+        "court": "Any Magistrate",
+        "similarity": 0.85
+      }
+    ],
+    "limitations": [],
+    "disclaimer": "Legal analysis provided by LawAid AI is for informational and educational purposes only..."
+  }
+}
+```
+
+---
+
 ## BNS Search
 
 ### GET /fir/bns/search?query=\<string\>
@@ -70,17 +112,27 @@ Response: { "status": "uploaded", "file_id": "string", "filename": "string" }
 
 ---
 
-## FIR Understand  *(planned — not yet built)*
+## FIR Understand
 
 ### POST /fir/understand
 ```
 Request:  multipart/form-data  field="file"  (PDF | JPEG | PNG)
 Response:
 {
+  "status": "ok",
   "file_id": "string",
+  "filename": "string",
+  "extracted_text": "string",
   "summary": "string",
-  "charges": "string",
-  "bns_sections": [{ "section": "318", "title": "Cheating" }],
+  "charges": [
+    {
+      "section": "string",
+      "title": "string",
+      "punishment": "string",
+      "bailable": "string",
+      "reasoning": "string"
+    }
+  ],
   "rights": ["string"],
   "next_steps": ["string"]
 }
@@ -88,12 +140,28 @@ Response:
 
 ---
 
-## FIR Generate  *(stub — planned)*
+## FIR Generate
 
 ### POST /fir/generate
 ```json
-Request:  { "complaint": "string" }
-Response: { "fir_id": "string", "status": "string", "pdf_url": "string | null" }
+Request:
+{
+  "complaint": "string",
+  "station_code": "PS001",
+  "district": "Central",
+  "complainant_name": "string"
+}
+Response:
+{
+  "fir_id": "FIR/2026/0123",
+  "status": "draft_created",
+  "sha256_hash": "string",
+  "created_at": "ISO-8601 string",
+  "station_code": "string",
+  "district": "string",
+  "pdf_url": null,
+  "summary": "string"
+}
 ```
 
 ---
