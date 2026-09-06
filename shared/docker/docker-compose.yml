@@ -35,6 +35,8 @@ services:
     container_name: lawaid-backend
     ports:
       - "8000:8000"
+    env_file:
+      - ../../.env
     environment:
       DATABASE_URL: postgresql://lawaid:changeme@postgres:5432/lawaid
       MONGO_URL: mongodb://mongo:27017/lawaid
