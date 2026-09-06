@@ -63,86 +63,9 @@ def analyze_incident_endpoint(body: IncidentAnalysisRequest):
             res = _run_pipeline(raw_incident=raw_incident)
             return {"status": "ok", "source": "pipeline", "data": res}
         except Exception as e:
-            # Fallback to direct retrieval if Groq key is missing or pipeline throws
-            pass
-
-    # Fallback 1: Direct ChromaDB retrieval if available
-    if _RAG_AVAILABLE:
-        try:
-            candidates = _retrieve_bns(query=raw_incident, top_k=5)
-            analysis_items = []
-            for item in candidates:
-                distance = float(item.get("distance", 1.0))
-                similarity = round(max(0.0, 1.0 - distance), 4)
-                if similarity >= 0.30:
-                    analysis_items.append({
-                        "offence_type": item.get("title", ""),
-                        "section": str(item.get("section", "")),
-                        "clause": item.get("clause", ""),
-                        "title": item.get("title", ""),
-                        "applicability": "supported" if similarity > 0.6 else "uncertain",
-                        "reasoning": f"Identified as candidate matching legal text (similarity: {int(similarity * 100)}%).",
-                        "punishment": "Refer to official BNS Schedule I",
-                        "bailable": item.get("bailable", ""),
-                        "cognizable": item.get("cognizable", ""),
-                        "court": "Competent Magistrate",
-                        "similarity": similarity,
-                    })
-            return {
-                "status": "ok",
-                "source": "retrieval_fallback",
-                "data": {
-                    "status": "success",
-                    "sanitized_incident": raw_incident,
-                    "privacy_metadata": {"detections": [], "replacement_map": {}},
-                    "analysis": analysis_items,
-                    "limitations": ["Cloud LLM reasoning unavailable. Showing vector retrieval matches."],
-                    "disclaimer": "Legal analysis provided by LawAid AI is for informational purposes only.",
-                }
-            }
-        except Exception:
-            pass
-
-    # Fallback 2: Realistic mock analysis
-    return {
-        "status": "ok",
-        "source": "mock",
-        "data": {
-            "status": "success",
-            "sanitized_incident": raw_incident,
-            "privacy_metadata": {"detections": [], "replacement_map": {}},
-            "analysis": [
-                {
-                    "offence_type": "Cheating",
-                    "section": "318",
-                    "clause": "4",
-                    "title": "Cheating",
-                    "applicability": "supported",
-                    "reasoning": "Incident describes deceptive inducement of property without honest intent.",
-                    "punishment": "Imprisonment up to 3 years, or with fine, or with both.",
-                    "bailable": "Bailable",
-                    "cognizable": "Non-Cognizable",
-                    "court": "Any Magistrate",
-                    "similarity": 0.81,
-                },
-                {
-                    "offence_type": "Criminal Intimidation",
-                    "section": "351",
-                    "clause": "2",
-                    "title": "Criminal Intimidation",
-                    "applicability": "uncertain",
-                    "reasoning": "Threat of injury appears intended to cause alarm, subject to exact words spoken.",
-                    "punishment": "Imprisonment up to 2 years, or fine, or both.",
-                    "bailable": "Bailable",
-                    "cognizable": "Non-Cognizable",
-                    "court": "Any Magistrate",
-                    "similarity": 0.68,
-                },
-            ],
-            "limitations": ["Development mode mock response."],
-            "disclaimer": "Legal analysis provided by LawAid AI is for informational purposes only.",
-        }
-    }
+            raise HTTPException(status_code=500, detail=f"AI Pipeline Error: {str(e)}")
+    
+    raise HTTPException(status_code=500, detail="AI Pipeline module not found or unavailable.")
 
 
 # ── BNS Search ──────────────────────────────────────────────────────────────
@@ -186,54 +109,10 @@ def search_bns(query: str = Query(..., min_length=3)):
             if not results:
                 return {"status": "insufficient_information", "source": "rag", "results": []}
             return {"status": "ok", "source": "rag", "results": results}
-        except Exception:
-            # Fall through to mock on any runtime error (e.g., Ollama not running)
-            pass
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"BNS Retrieval Error: {str(e)}")
 
-    # ── Mock fallback (remove once Ollama + ChromaDB are set up) ────────────
-    mock_results = [
-        {
-            "rank": 1,
-            "section": "318",
-            "clause": "",
-            "title": "Cheating",
-            "text": (
-                "Whoever, by deceiving any person, fraudulently or dishonestly induces "
-                "the person so deceived to deliver any property to any person, or to consent "
-                "that any person shall retain any property, or intentionally induces the person "
-                "so deceived to do or omit to do anything which he would not do or omit if he "
-                "were not so deceived, and which act or omission causes or is likely to cause "
-                "damage or harm to that person in body, mind, reputation or property, is said "
-                "to 'cheat'."
-            ),
-            "chapter": "CHAPTER XVII",
-            "bailable": "Bailable",
-            "cognizable": "Non-Cognizable",
-            "similarity": 0.81,
-        },
-        {
-            "rank": 2,
-            "section": "351",
-            "clause": "",
-            "title": "Criminal Intimidation",
-            "text": (
-                "Whoever threatens another with any injury to his person, reputation or "
-                "property, or to the person or reputation of any one in whom that person is "
-                "interested, with intent to cause alarm to that person, or to cause that person "
-                "to do any act which he is not legally bound to do, or to omit to do any act "
-                "which that person is legally entitled to do, as the means of avoiding the "
-                "execution of such threat, commits criminal intimidation."
-            ),
-            "chapter": "CHAPTER XVII",
-            "bailable": "Bailable",
-            "cognizable": "Non-Cognizable",
-            "similarity": 0.68,
-        },
-    ]
-    top = mock_results[0]
-    if top["similarity"] < 0.72:
-        return {"status": "insufficient_information", "source": "mock", "results": []}
-    return {"status": "ok", "source": "mock", "results": mock_results}
+    raise HTTPException(status_code=500, detail="BNS Retrieval module not found or unavailable.")
 
 
 # ── FIR Upload ───────────────────────────────────────────────────────────────
@@ -339,30 +218,13 @@ async def understand_fir(file: UploadFile = File(...)):
                     f"Key facts stated in FIR:\n"
                     + (extracted_text[:400] + ("..." if len(extracted_text) > 400 else ""))
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"AI Pipeline Error: {str(e)}")
+        else:
+            raise HTTPException(status_code=500, detail="AI Pipeline module not found or unavailable.")
 
     if not plain_summary:
-        plain_summary = (
-            "FIR document successfully received and stored. The document records official police complaint "
-            "details alleging offences under the Bharatiya Nyaya Sanhita (BNS)."
-        )
-        charges_summary = [
-            {
-                "section": "303",
-                "title": "Theft",
-                "punishment": "Imprisonment up to 3 years, or fine, or both",
-                "bailable": "Non-bailable",
-                "reasoning": "Complaint alleges dishonest moving of property without consent.",
-            },
-            {
-                "section": "351",
-                "title": "Criminal Intimidation",
-                "punishment": "Imprisonment up to 2 years, or fine, or both",
-                "bailable": "Bailable",
-                "reasoning": "Threat causing alarm to complainant.",
-            },
-        ]
+        raise HTTPException(status_code=400, detail="Could not extract text from the document.")
 
     rights = [
         "Right to a free copy of the First Information Report (FIR) immediately under Section 173 BNSS.",
@@ -403,11 +265,17 @@ class FIRGenerateRequest(BaseModel):
 @router.post("/generate")
 def generate_fir(body: FIRGenerateRequest = None):
     """
-    Generates a formal First Information Report (FIR) draft.
+    Generates a formal First Information Report (FIR) draft as a PDF.
     Returns official FIR ID, generated timestamp, and verification hash.
     """
     import hashlib
     import datetime
+    import io
+    try:
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import A4
+    except ImportError:
+        raise HTTPException(status_code=500, detail="PDF generation module (reportlab) not installed.")
 
     now = datetime.datetime.now()
     year = now.year
@@ -415,20 +283,71 @@ def generate_fir(body: FIRGenerateRequest = None):
     fir_id = f"FIR/{year}/{seq:04d}"
 
     complaint_text = body.complaint if body and body.complaint else "General complaint lodged."
-    content_bytes = f"{fir_id}:{complaint_text}:{now.isoformat()}".encode("utf-8")
-    sha256_hash = hashlib.sha256(content_bytes).hexdigest()
+    complainant_name = body.complainant_name if body and body.complainant_name else "Citizen"
+    station_code = body.station_code if body else "PS001"
+
+    # Create PDF in memory
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(50, height - 50, "FIRST INFORMATION REPORT (FIR)")
+    c.setFont("Helvetica", 12)
+    c.drawString(50, height - 80, f"FIR ID: {fir_id}")
+    c.drawString(50, height - 100, f"Date: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    c.drawString(50, height - 120, f"Police Station: {station_code}")
+    c.drawString(50, height - 140, f"Complainant: {complainant_name}")
+    
+    c.drawString(50, height - 170, "Incident Description:")
+    c.setFont("Helvetica", 10)
+    
+    # Wrap text
+    import textwrap
+    lines = textwrap.wrap(complaint_text, width=80)
+    y_pos = height - 190
+    for line in lines:
+        c.drawString(50, y_pos, line)
+        y_pos -= 15
+        if y_pos < 100:
+            c.showPage()
+            c.setFont("Helvetica", 10)
+            y_pos = height - 50
+    
+    c.save()
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+
+    sha256_hash = hashlib.sha256(pdf_bytes).hexdigest()
+    
+    # Store in MongoDB
+    from app.core.mongo import fs
+    file_id = fs.put(pdf_bytes, filename=f"{fir_id.replace('/', '_')}.pdf", content_type="application/pdf", metadata={"fir_id": fir_id, "hash": sha256_hash})
 
     return {
         "fir_id": fir_id,
         "status": "draft_created",
         "sha256_hash": sha256_hash,
         "created_at": now.isoformat(),
-        "station_code": body.station_code if body else "PS001",
+        "station_code": station_code,
         "district": body.district if body else "Central",
-        "pdf_url": None,
+        "pdf_url": f"/api/fir/download/{str(file_id)}",
         "summary": f"Draft FIR registered under ID {fir_id}. Ready for official review and station stamp.",
     }
 
+from fastapi.responses import StreamingResponse
+
+@router.get("/download/{file_id}")
+def download_fir(file_id: str):
+    from bson.objectid import ObjectId
+    try:
+        file_data = fs.get(ObjectId(file_id))
+        return StreamingResponse(
+            file_data,
+            media_type=file_data.content_type,
+            headers={"Content-Disposition": f"attachment; filename={file_data.filename}"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="File not found")
 
 @router.get("/{fir_id}")
 def get_fir(fir_id: str):

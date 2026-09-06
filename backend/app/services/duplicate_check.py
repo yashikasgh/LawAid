@@ -36,22 +36,29 @@ def check_duplicate(db: Session, complaint_text: str, similarity_threshold: floa
     highest_score = 0.0
     matched_fir_id = None
 
-    # Check against recent FIR IDs or standard sample records
+    # Check against recent FIR IDs using token similarity on complaint text
     for fir in recent_firs:
-        # If the record has complaint text or matching station code
-        score = _token_similarity(cleaned_input, fir.fir_id + " " + (fir.station_code or ""))
+        if not fir.complaint_text:
+            continue
+        score = _token_similarity(cleaned_input, fir.complaint_text)
         if score > highest_score:
             highest_score = score
             matched_fir_id = fir.fir_id
 
-    # If Ollama is running, attempt embedding similarity
+    # If sentence-transformers is available, attempt semantic embedding similarity
     try:
-        import ollama
-        resp = ollama.embed(model="nomic-embed-text", input=cleaned_input[:500])
-        input_emb = resp.get("embeddings", [[]])[0]
-        # Compare if collection exists
-        from ai.rag.retrieval.retrieve_bns import retrieve
-        # Check matches
+        from sentence_transformers import SentenceTransformer, util
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+        input_emb = model.encode(cleaned_input, convert_to_tensor=True)
+        
+        for fir in recent_firs:
+            if not fir.complaint_text:
+                continue
+            fir_emb = model.encode(fir.complaint_text, convert_to_tensor=True)
+            sim_score = util.cos_sim(input_emb, fir_emb).item()
+            if sim_score > highest_score:
+                highest_score = sim_score
+                matched_fir_id = fir.fir_id
     except Exception:
         pass
 

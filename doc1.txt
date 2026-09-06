@@ -1,0 +1,804 @@
+LawAid
+AI-Powered Legal Assistance & FIR Intelligence Platform
+Implementation Guide · Tech Stack Reference · Team Work Division
+Major Project 2025–26
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 2
+Table of Contents
+1. Project Overview & Architecture Summary
+2. GitHub Repository Structure & Collaboration Setup
+3. Phase-by-Phase Implementation Roadmap
+4. Feature Implementation Guide with Tech Stack
+5. Suggested Improvements to the Existing Plan
+6. Work Division — Person 1 (Backend + AI Core)
+7. Work Division — Person 2 (AI Intelligence + RAG + OCR)
+8. Work Division — Person 3 (Frontend + Integration + Docs)
+9. Parallel Collaboration Rules & GitHub Workflow
+10. Environment Setup & Developer Onboarding
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 3
+  01
+Project Overview & Architecture Summary
+What LawAid Does
+LawAid is a privacy-first, locally-hosted AI platform that bridges the gap between citizens, police officers, and
+legal professionals in understanding and filing FIRs under the new Bharatiya Nyaya Sanhita (BNS). It replaces
+confusion around the IPC-to-BNS transition with an intelligent, guided experience.
+Three User Modules
+Module
+Who Uses It
+Core Capability
+Citizen Module
+Victims / General Public
+Describe incident → get BNS sections → suggested next
+actions
+Police Module
+Constables / Officers
+Voice/text victim input → AI extracts details → validate FIR →
+unique FIR ID + hash
+Lawyer Module
+Advocates / Legal Aid
+Orgs
+Upload documents → AI timeline + research + drafting
+assistance
+Technology Stack at a Glance
+Layer
+Technology
+Purpose
+Frontend
+Next.js + React + TypeScript + Tailwind
+CSS
+Web UI for all three user roles
+Backend
+FastAPI + Python
+REST API, business logic, service orchestration
+AI / LLM
+Ollama + Llama 3.1 + LangChain
+Local inference, prompt chaining, legal reasoning
+RAG
+Sentence Transformers + FAISS /
+ChromaDB
+Semantic BNS section retrieval with citations
+OCR
+EasyOCR + Tesseract
+Extract text from scanned FIR images/PDFs
+Databases
+PostgreSQL + MongoDB
+Users/roles/audit (PG) · FIR drafts/docs (Mongo)
+Auth &
+Security
+JWT + RBAC + SHA-256
+Role-based access, document integrity hashing
+Deployment
+Docker + Nginx + Linux
+Containerised local deployment
+Speech-to-Te
+xt
+Whisper (OpenAI) or Vosk
+Offline voice transcription for police module
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 4
+  02
+GitHub Repository Structure & Collaboration Setup
+The monorepo is split into three independent top-level directories so each person can work without ever
+touching the other's code. Shared contracts (API schemas, environment configs) live in a fourth directory.
+Recommended Repository Layout
+lawaid/
+III frontend/ ← Person 3 owns this entirely
+I III app/ (Next.js pages & layouts)
+I III components/ (React UI components)
+I III lib/ (API client, hooks)
+III backend/ ← Person 1 owns this entirely
+I III app/ (FastAPI routers, services)
+I III models/ (Pydantic + DB models)
+I III tests/
+III ai/ ← Person 2 owns this entirely
+I III rag/ (vector DB, embeddings)
+I III ocr/ (EasyOCR / Tesseract)
+I III fir_engine/ (generation & understanding)
+I III speech/ (Whisper STT)
+III shared/ ← All three contribute
+III schemas/ (shared Pydantic/TypeScript types)
+III docker/ (docker-compose, Dockerfiles)
+III docs/ (API docs, architecture diagrams)
+Branching Strategy
+Branch
+Who Uses It
+Purpose
+main
+All (protected)
+Always deployable. Only merged via PR.
+dev
+All
+Integration branch. All features merge here first.
+person1/feature-name
+Person 1
+e.g. person1/auth-service
+person2/feature-name
+Person 2
+e.g. person2/rag-engine
+person3/feature-name
+Person 3
+e.g. person3/citizen-dashboard
+Golden Rules for Zero-Conflict Collaboration
+• Never commit directly to main. Always open a Pull Request and get one review.
+• Each person owns their directory. If you need to touch another person's code, open an issue first.
+• Shared schemas in shared/schemas/ — agree on changes in the group chat before modifying.
+• Use .env.example (committed) and .env (gitignored). Never commit real secrets.
+• Write a one-line commit message: feat(auth): add JWT refresh token endpoint (conventional commits).
+• Pull from dev every morning before starting work to stay up to date.
+• Use GitHub Issues to assign tasks. Link every PR to its issue.
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 5
+  03
+Phase-by-Phase Implementation Roadmap (14 Weeks)
+Each phase is designed so all three people can work simultaneously. No phase has a hard dependency on
+another being 100% complete — stub APIs and mock data keep everyone unblocked.
+Phase 1 · Weeks 1–2 — Foundation
+Step
+Details
+What happens
+BNS dataset collection, architecture finalization, shared schema definition, repo
+creation, Docker setup, environment configuration.
+Person 1
+Set up FastAPI skeleton, PostgreSQL schema, JWT auth stubs.
+Person 2
+Research BNS dataset sources, preprocess BNS text corpus, set up Ollama +
+Llama 3.1 locally.
+Person 3
+Set up Next.js project, Tailwind config, routing skeleton, component library.
+Shared deliverable
+shared/schemas/ — TypeScript + Pydantic types for User, FIR, BNS Section.
+Phase 2 · Weeks 3–4 — Auth + DB
+Step
+Details
+What happens
+Full authentication flow, database setup, role-based access, basic CI/CD pipeline.
+Person 1
+JWT login/register, RBAC middleware, PostgreSQL migrations, MongoDB
+connection.
+Person 2
+FAISS / ChromaDB setup, load BNS section embeddings, test vector search.
+Person 3
+Login + registration pages, protected route guards, role-aware layout components.
+Integration point
+Person 3 calls Person 1's /auth endpoints. Person 2 exposes /search stub.
+Phase 3 · Weeks 5–6 — OCR + Document
+Step
+Details
+What happens
+Document upload pipeline, OCR extraction, PDF processing.
+Person 1
+File upload endpoint, document storage service, MongoDB document schema.
+Person 2
+EasyOCR + Tesseract integration, FIR text extraction pipeline, section detection
+regex.
+Person 3
+Document upload UI, drag-and-drop component, upload progress indicator.
+Integration point
+Person 3 calls Person 1's upload API. Person 1 calls Person 2's OCR service.
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 6
+Phase 4 · Weeks 7–8 — RAG Engine
+Step
+Details
+What happens
+Full BNS retrieval, vector search, citation support.
+Person 1
+BNS search API endpoint, caching layer for frequent searches.
+Person 2
+Sentence Transformer embeddings, FAISS index, semantic search, top-k retrieval
+with score.
+Person 3
+BNS search UI, section detail cards, plain-language explanation display.
+Integration point
+Person 3 → Person 1 → Person 2 for end-to-end BNS search.
+Phase 5 · Weeks 9–10 — LLM + Chat
+Step
+Details
+What happens
+Ollama integration, legal chat assistant, prompt templates.
+Person 1
+Chat session API, message history storage in MongoDB, streaming SSE endpoint.
+Person 2
+LangChain prompt templates, Llama 3.1 legal reasoning chain, context injection
+from RAG.
+Person 3
+Legal chat UI, message bubbles, streaming response display, session history
+sidebar.
+Phase 6 · Week 11 — FIR Engines
+Step
+Details
+What happens
+FIR generation and FIR understanding engines — the core product features.
+Person 1
+FIR generation API, FIR understanding API, PDF generation endpoint, audit log
+writes.
+Person 2
+Complaint → BNS mapping logic, structured FIR template filling, citizen-friendly
+summary generation.
+Person 3
+FIR generator form UI, FIR understanding results page, download PDF button.
+Phase 7 · Week 12 — Police Module
+Step
+Details
+What happens
+Voice input, STT, constable validation flow, unique FIR ID + SHA-256 hashing.
+Person 1
+Unique FIR ID generation, SHA-256 document hashing, duplicate check logic.
+Person 2
+Whisper / Vosk speech-to-text integration, NER extraction on victim statement,
+BNS suggestion with explanations.
+Person 3
+Police dashboard, voice input component (Web Speech API), constable validation
+UI with section explanations.
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 7
+Phase 8 · Week 13 — Testing
+Step
+Details
+What happens
+Unit tests, integration tests, security audit, performance testing.
+Person 1
+API endpoint tests (pytest), auth security tests, load testing with Locust.
+Person 2
+FIR accuracy evaluation (>85% target), BNS retrieval accuracy test (>90% target),
+OCR accuracy.
+Person 3
+UI tests (Playwright or Cypress), mobile responsiveness audit, accessibility check.
+Phase 9 · Week 14 — Deployment
+Step
+Details
+What happens
+Docker compose, Nginx config, final demo, documentation.
+Person 1
+Docker Compose orchestration, Nginx reverse proxy config, server setup.
+Person 2
+Ollama containerisation, model download scripts, AI module Dockerfiles.
+Person 3
+Next.js production build, environment variable wiring, demo video + user manual.
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 8
+  04
+Feature Implementation Guide with Tech Stack
+4.1 User Authentication & RBAC
+Tech stack
+FastAPI + python-jose (JWT) + bcrypt + PostgreSQL
+How to
+build
+1. Create /auth/register and /auth/login endpoints in FastAPI. 2. On login, issue a JWT with role
+claim (citizen / police / lawyer / admin). 3. Create a get_current_user dependency that decodes the
+JWT and injects the user. 4. Create a require_role(role) decorator that gates routes by role. 5. Store
+users in PostgreSQL: id, email, password_hash, role, created_at.
+Files
+backend/app/routers/auth.py · backend/app/models/user.py · backend/app/core/security.py
+4.2 Complaint Analysis & NER Extraction
+Tech stack
+spaCy (NER) + Python + FastAPI
+How to
+build
+1. Load spaCy en_core_web_sm or a custom fine-tuned legal NER model. 2. Extract entities:
+PERSON, DATE, TIME, GPE (location), ORG from the complaint text. 3. Custom entity labels:
+ACCUSED, VICTIM, OFFENCE_TYPE using spaCy's Ruler. 4. Return structured JSON: { victim,
+accused, date, location, offence_type, raw_text }.
+Files
+ai/fir_engine/ner_extractor.py
+4.3 BNS Section Retrieval (RAG)
+Tech stack
+Sentence Transformers (all-MiniLM-L6-v2) + FAISS + LangChain
+How to
+build
+1. Preprocess BNS dataset: each section = { id, number, title, text, penalty }. 2. Embed each section
+using SentenceTransformer and store vectors in FAISS index. 3. On query, embed the complaint
+text and run FAISS.search(query_vec, top_k=5). 4. Return matched sections with cosine similarity
+scores. 5. Wrap in LangChain RetrievalQA chain so Llama 3.1 can cite sections in answers.
+Files
+ai/rag/embedder.py · ai/rag/retriever.py · ai/rag/bns_index.faiss
+4.4 FIR Generation Engine
+Tech stack
+Llama 3.1 via Ollama + LangChain + Jinja2 templates + ReportLab (PDF)
+How to
+build
+1. Take NER output + retrieved BNS sections as context. 2. Fill a Jinja2 FIR template with extracted
+fields. 3. Pass template + BNS context into a LangChain chain with Llama 3.1. 4. LLM fills in
+narrative sections and validates legal language. 5. Render final FIR as PDF using ReportLab.
+Generate SHA-256 hash of PDF bytes. 6. Store { fir_id, hash, pdf_path, created_by, timestamp } in
+MongoDB.
+Files
+ai/fir_engine/generator.py · backend/app/routers/fir.py · ai/fir_engine/fir_template.j2
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 9
+4.5 FIR Understanding Engine (OCR → Explanation)
+Tech stack
+EasyOCR + Tesseract + PyMuPDF + Llama 3.1
+How to
+build
+1. Accept uploaded FIR image or PDF. 2. For PDF: use PyMuPDF to extract text layer; fall back to
+EasyOCR if scanned. 3. For image: run EasyOCR to extract text. 4. Run regex patterns to detect
+BNS section numbers in extracted text. 5. For each detected section, retrieve full text from FAISS
+index. 6. Pass full FIR + sections to Llama 3.1 with prompt: explain this FIR in simple language, list
+the citizen's rights, and suggest next steps.
+Files
+ai/ocr/extractor.py · ai/fir_engine/explainer.py
+4.6 Speech-to-Text for Police Module
+Tech stack
+OpenAI Whisper (local, whisper.cpp) or Vosk (fully offline)
+How to
+build
+1. Frontend records audio using the Web Speech API or MediaRecorder API. 2. Send audio blob to
+backend POST /police/transcribe endpoint. 3. Backend passes audio to Whisper model:
+whisper.transcribe(audio_path). 4. Return transcript text. Feed into NER extraction pipeline (same
+as text input). 5. Whisper supports Hindi, Marathi, and other Indian languages.
+Files
+ai/speech/transcriber.py · backend/app/routers/police.py
+4.7 Unique FIR ID + SHA-256 Authentication
+Tech stack
+Python hashlib + UUID + PostgreSQL
+How to
+build
+1. After FIR draft is approved by constable, generate UUID4 as FIR ID. 2. Compute SHA-256 of the
+final PDF bytes: hashlib.sha256(pdf_bytes).hexdigest(). 3. Store { fir_id, sha256_hash, officer_id,
+timestamp, station_code } in PostgreSQL. 4. Print FIR ID and hash on the bottom of every PDF
+page. 5. Verification endpoint: POST /fir/verify accepts fir_id + file, recomputes hash, returns
+match/mismatch.
+Files
+backend/app/services/fir_auth.py
+4.8 Legal Chat Assistant
+Tech stack
+LangChain ConversationChain + Llama 3.1 + FastAPI SSE + React
+How to
+build
+1. Each chat session has a session_id stored in MongoDB with message history. 2. Backend uses
+LangChain ConversationBufferWindowMemory (last 10 messages). 3. System prompt: You are a
+legal assistant for Indian law. Only answer about BNS/legal topics. 4. Inject relevant BNS sections
+from RAG into context before each LLM call. 5. Stream response using FastAPI
+StreamingResponse with SSE format. 6. Frontend consumes SSE with EventSource API for live
+streaming display.
+Files
+ai/chat/assistant.py · backend/app/routers/chat.py · frontend/components/ChatInterface.tsx
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 10
+4.9 Duplicate Complaint Detection
+Tech stack
+Sentence Transformers + cosine similarity + PostgreSQL
+How to
+build
+1. When a new complaint comes in, embed it with Sentence Transformer. 2. Compare against last
+30 days of complaint embeddings stored in PostgreSQL (vector column). 3. If cosine similarity >
+0.92, flag as potential duplicate. 4. Return { is_duplicate: true, similar_fir_id: '...' } to the police
+constable for review. 5. Constable decides whether to proceed or merge.
+Files
+backend/app/services/duplicate_check.py
+4.10 Multilingual Support
+Tech stack
+IndicTrans2 (AI4Bharat) or Google Translate API (fallback) + i18next (frontend)
+How to
+build
+1. Frontend: use i18next for UI string translations. Ship Hindi + Marathi + English by default. 2. For
+user-typed input in regional languages: run through IndicTrans2 → translate to English for NER. 3.
+For LLM output: if user's preferred language is set, add instruction to Llama 3.1 prompt: respond in
+[language]. 4. Store user language preference in PostgreSQL users table.
+Files
+frontend/lib/i18n/ · backend/app/services/translation.py
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 11
+  05
+Suggested Improvements to the Existing Plan
+The following improvements extend the original PRD/TRD without breaking the existing architecture. Each is
+marked with implementation effort.
+CITIZEN FLOW
+Replace direct FIR generation with guided next-actions
+Effort: Low
+Already updated in flow redesign. After BNS recommendation, show: nearest police station map, lawyer
+contact directory, helpline 112 button, legal aid org finder. Citizens cannot file FIRs themselves — this is legally
+accurate.
+Downloadable complaint summary PDF
+Effort: Low
+Let citizens download a PDF of their incident description + recommended BNS sections to carry to the police
+station. Builds trust and helps the constable too.
+WhatsApp / SMS channel
+Effort: Medium
+Integrate Twilio WhatsApp API. Citizens send a voice note or text describing the incident. Bot runs the same
+NER + BNS pipeline and replies with recommended actions. Reaches users without smartphone apps.
+POLICE MODULE
+Voice input with multilingual STT
+Effort: Medium
+Use OpenAI Whisper (local). Supports Hindi, Marathi, Tamil, and 90+ languages. Victim speaks in their
+language; transcript is auto-translated to English for NER processing.
+BNS sections shown with explanations to constable
+Effort: Low
+Each suggested section shows: section number, offence name, minimum/maximum penalty, and a 2-line
+plain-English explanation. Constable can click to expand full section text.
+Constable OTP confirmation before FIR lock
+Effort: Low
+After draft approval, send OTP to the constable's registered phone. Constable enters OTP to cryptographically
+lock the FIR. This adds human authorization on top of the SHA-256 hash.
+Victim notification SMS when FIR is registered
+Effort: Low
+After FIR is locked, send the victim an SMS with FIR ID, station name, and a tracking link. Use Twilio or
+Fast2SMS (cheaper for India).
+AI & TECHNICAL
+Agent layer above Ollama
+Effort: Medium
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 12
+Add an orchestrator agent with four sub-agents: FIR Agent, Legal Agent, OCR Agent, Research Agent. The
+orchestrator routes queries to the right agent. This is already diagrammed in the architecture document. Use
+LangChain Agents or LlamaIndex.
+ChromaDB over FAISS for persistence
+Effort: Low
+FAISS requires manual index save/load. ChromaDB is a full vector DB with persistence, filtering, and metadata
+queries built in. Drop-in replacement — same Sentence Transformer embeddings.
+IPC to BNS migration lookup tool
+Effort: Low
+A simple two-column lookup table in the lawyer module: enter an old IPC section, get the BNS equivalent.
+Dataset is publicly available from the MHA. Massive value for lawyers handling ongoing cases.
+FIR status tracker for citizens
+Effort: Medium
+Add a status column to the FIR table: Registered → Under Investigation → Charge Sheet Filed → Closed.
+Citizens can check status by FIR ID without visiting the station.
+Offline mode for police module
+Effort: High
+Use a service worker to cache the police module pages. Queue FIR data in IndexedDB. Sync to the server
+when connectivity is restored. Critical for rural police stations.
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 13
+  06/07/08
+Work Division — All Three People
+Designed for simultaneous parallel work with zero blocking
+Each person has a clearly owned directory and set of features. The shared/schemas/ contract is the only
+coordination point — agree on it in Week 1 and everyone can work independently for the remaining 13 weeks.
+Person 1
+Person 2
+Person 3
+Backend + Auth + APIs
+AI Core + RAG + OCR + STT
+Frontend + UI + Integration
+backend/
+ai/
+frontend/
+  06
+Person 6 — Backend Developer
+Role: Backend + Auth + APIs + DB · Owns: backend/
+Responsibility Overview
+Owns: The entire backend/ directory — FastAPI application, all API routers, database models, service layer
+Coordinates with: Person 2 for AI service endpoints, Person 3 for API contract definitions
+Feature: Authentication Service
+Build: /auth/register, /auth/login, /auth/refresh, /auth/logout endpoints
+Tech: FastAPI + python-jose (JWT) + bcrypt + PostgreSQL
+Deliverable: Working JWT auth with role claim: citizen / police / lawyer / admin
+Feature: FIR API Layer
+Build: POST /fir/generate, POST /fir/upload, GET /fir/{id}, POST /fir/verify
+Tech: FastAPI + MongoDB (pymongo) + SHA-256 (hashlib) + UUID4
+Deliverable: FIR CRUD with unique ID generation, hash computation, audit log entry
+Feature: Police API Endpoints
+Build: POST /police/transcribe (calls STT), POST /police/validate-fir, POST /police/approve-fir
+Tech: FastAPI routers + calls to ai/ modules via internal HTTP or function import
+Deliverable: Full police workflow API: from victim statement to approved FIR
+Feature: Database Setup & Migrations
+Build: PostgreSQL schema (users, roles, audit_logs, sessions, fir_registry), MongoDB collections
+Tech: Alembic (PostgreSQL migrations) + pymongo + SQLAlchemy ORM
+Deliverable: Reproducible DB setup via alembic upgrade head and mongo seed script
+Feature: Audit Logging & Security
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 14
+Build: Middleware that logs every API call: user_id, endpoint, action, timestamp, ip_address
+Tech: FastAPI middleware + PostgreSQL audit_logs table
+Deliverable: Complete audit trail for every FIR operation
+Feature: Duplicate Complaint Check
+Build: Service that embeds incoming complaint and compares against recent complaints
+Tech: Calls Person 2's embedding function + cosine similarity check
+Deliverable: POST /fir/check-duplicate → { is_duplicate, similar_fir_id, similarity_score }
+GitHub workflow for Person 1
+Daily: git pull origin dev at start of day
+Branches: person1/auth-service, person1/fir-api, person1/police-api, person1/db-setup
+PRs: Open PR to dev when feature is complete. Tag Person 3 for review (they consume the API).
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 15
+  07
+Person 7 — AI Engineer
+Role: AI Core + RAG + OCR + Speech-to-Text · Owns: ai/
+Responsibility Overview
+Owns: The entire ai/ directory — RAG engine, OCR pipeline, FIR generation logic, STT, LLM chains
+Coordinates with: Person 1 who calls ai/ services via internal imports or HTTP, Person 3 for AI output display
+Feature: BNS Dataset & Preprocessing
+Build: Scrape / collect BNS sections dataset. Clean and structure: { section_id, number, title, text, penalty }
+Tech: Python + pandas + BeautifulSoup (if scraping)
+Deliverable: bns_sections.json — clean dataset of all BNS sections ready for embedding
+Feature: RAG Engine (Embeddings + Vector Search)
+Build: Embed all BNS sections using Sentence Transformers. Build FAISS / ChromaDB index. Retrieval
+function.
+Tech: sentence-transformers (all-MiniLM-L6-v2) + FAISS or ChromaDB + LangChain
+Deliverable: retrieve_bns(query: str, top_k=5) → list[BNSSection] function exposed to backend
+Feature: OCR Pipeline
+Build: Accept image or PDF → extract text → detect BNS section numbers
+Tech: EasyOCR + Tesseract + PyMuPDF + regex patterns for BNS section detection
+Deliverable: extract_fir_text(file_path) → { text, detected_sections: list[str] }
+Feature: FIR Generation Engine
+Build: Jinja2 template + LangChain chain that takes NER output + BNS sections → structured FIR draft
+Tech: LangChain LLMChain + Llama 3.1 (Ollama) + Jinja2
+Deliverable: generate_fir(ner_output, bns_sections) → fir_text (str)
+Feature: FIR Explanation Engine
+Build: Takes OCR-extracted FIR text → produces citizen-friendly summary + rights + next steps
+Tech: LangChain + Llama 3.1 with carefully designed system prompt
+Deliverable: explain_fir(fir_text) → { summary, sections_explained, rights, next_steps }
+Feature: Speech-to-Text
+Build: Accept audio file → transcribe to text. Support Hindi, Marathi, English.
+Tech: OpenAI Whisper (local, whisper Python package) or Vosk (fully offline)
+Deliverable: transcribe(audio_path) → { text, language_detected }
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 16
+Feature: NER Extraction
+Build: Extract named entities from complaint text: victim, accused, date, location, offence
+Tech: spaCy + custom EntityRuler for legal entities
+Deliverable: extract_entities(text) → { victim, accused, date, location, offence_type, raw }
+Feature: Legal Chat Chain
+Build: ConversationChain with RAG context injection. System prompt enforces legal-only responses.
+Tech: LangChain ConversationChain + Llama 3.1 + FAISS retriever
+Deliverable: chat(session_id, message, history) → streamed response generator
+GitHub workflow for Person 2
+Daily: git pull origin dev at start of day
+Branches: person2/rag-engine, person2/ocr-pipeline, person2/fir-generator, person2/stt
+PRs: Open PR to dev when module is complete. Tag Person 1 for review (they import your functions).
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 17
+  08
+Person 8 — Frontend Developer
+Role: Frontend + UI + Integration + Docs · Owns: frontend/
+Responsibility Overview
+Owns: The entire frontend/ directory — Next.js app, all React components, API client, UI/UX
+Coordinates with: Person 1 for API endpoints, Person 2 for understanding AI output format
+Feature: Project Setup & Design System
+Build: Next.js 14 App Router setup, Tailwind CSS config, dark/navy colour palette (Dark Blue / White / Gold)
+Tech: Next.js + TypeScript + Tailwind CSS + shadcn/ui
+Deliverable: Base layout, theme config, shared component library (Button, Card, Badge, Modal)
+Feature: Auth Pages & Protected Routes
+Build: Login page, Register page, role selection, protected route wrapper using NextAuth or custom JWT
+handling
+Tech: NextAuth.js or custom JWT context + Next.js middleware for route guards
+Deliverable: Role-aware routing: /citizen/*, /police/*, /lawyer/*, /admin/*
+Feature: Citizen Dashboard
+Build: Four main action cards: Describe Incident, Upload FIR, Chat with Legal Assistant, Search BNS
+Tech: React + Tailwind + Axios for API calls
+Deliverable: Responsive citizen dashboard with clear action flow
+Feature: Complaint Form & BNS Results
+Build: Multi-step form: describe incident → loading animation → BNS section cards → next-action suggestions
+Tech: React Hook Form + Zod validation + animated cards
+Deliverable: Full citizen complaint-to-recommendations flow
+Feature: Police Dashboard
+Build: Voice recorder component + text input + NER results display + BNS section cards with explanations +
+FIR validation form
+Tech: MediaRecorder API (Web Speech) + React state machine for multi-step flow
+Deliverable: Complete police FIR registration UI from victim statement to approved FIR
+Feature: FIR Upload & Understanding UI
+Build: Drag-and-drop file upload, upload progress bar, OCR result display, plain-language summary cards,
+rights section
+Tech: react-dropzone + Axios multipart upload + animated skeleton loaders
+Deliverable: FIR upload → explanation flow with clear visual hierarchy
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 18
+Feature: Legal Chat Interface
+Build: Chat UI with streaming response display (like ChatGPT), session history sidebar, suggested question
+chips
+Tech: EventSource API for SSE streaming + React refs for auto-scroll
+Deliverable: Real-time streaming legal chat interface
+Feature: Lawyer Dashboard
+Build: Document upload, timeline display, research results, drafting interface
+Tech: React + react-pdf for PDF preview + Tailwind prose styling
+Deliverable: Lawyer module UI with document analysis workflow
+Feature: Mobile Responsiveness
+Build: All pages tested at 375px (iPhone SE), 390px (iPhone 14), 768px (tablet), 1280px (desktop)
+Tech: Tailwind responsive utilities (sm: md: lg:) + mobile-first approach
+Deliverable: Fully responsive across all breakpoints
+Feature: Demo Video + User Manual
+Build: Record a 5-minute demo showing all three user flows. Write user manual PDF.
+Tech: OBS Studio (screen recording) + Canva or Google Docs (manual)
+Deliverable: demo_video.mp4 + user_manual.pdf in shared/docs/
+GitHub workflow for Person 3
+Daily: git pull origin dev at start of day
+Branches: person3/auth-pages, person3/citizen-dashboard, person3/police-ui, person3/chat-ui
+PRs: Open PR to dev when feature is complete. Tag Person 1 for review (API integration check).
+Tip: Use MSW (Mock Service Worker) to mock APIs while Person 1 is still building — never blocked.
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 19
+  09
+Parallel Collaboration Rules & GitHub Workflow
+How to work simultaneously without stepping on each other
+The Three-Directory Contract
+The most important rule: each person's directory is their kingdom. Person 1 never modifies frontend/. Person 2
+never modifies backend/ router files. Person 3 never modifies ai/ model files. The only shared territory is
+shared/schemas/ — and changes there require a group chat discussion first.
+API Contract First Approach
+In Week 1, define all API endpoints as OpenAPI specs in shared/schemas/api.yaml before anyone writes
+implementation code. Person 3 can then build the entire frontend against mock API responses using MSW while
+Person 1 builds the real endpoints. When Person 1 is done, Person 3 just removes the mocks — no refactoring
+needed.
+Handling Integration Points
+Integration Point
+Who Owns It
+How to Handle
+Person 3 calls Person 1's API
+Person 1 owns
+endpoint
+Person 3 uses MSW mock until endpoint is ready. PR review:
+Person 1 checks integration.
+Person 1 calls Person 2's AI
+functions
+Person 2 owns
+function
+Person 1 writes a stub: return mock_fir_draft(). Replace when
+Person 2 delivers.
+Shared Pydantic/TypeScript
+types
+All three
+Change in shared/schemas/ requires PR + review from all
+three. Keep types simple.
+Docker Compose service
+ports
+All three
+Agreed in Week 1: backend=8000, ai-service=8001,
+frontend=3000, postgres=5432, mongo=27017.
+Environment variables
+All three
+.env.example committed. Each person adds their vars with a
+comment explaining what it does.
+Daily Workflow (All Three)
+Step
+Details
+9:00 AM
+git pull origin dev — always start fresh
+During work
+Commit small and often. One logical change per commit.
+Before lunch
+Push your branch. Others can see your progress.
+End of day
+If feature is done, open PR to dev. If not, push WIP branch.
+Weekly
+One group call to discuss blockers, integration points, and next week's plan.
+Merge Conflict Prevention
+• Keep functions small and in their own files. Large files = more merge conflicts.
+• Use index files (index.ts, __init__.py) to re-export — import from the module, not the file.
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 20
+• Never reformat an entire file (e.g. running Prettier on the whole codebase) without telling the team.
+• Use atomic PRs: one feature per PR, reviewed and merged before starting the next feature in the same file.
+• Set up GitHub branch protection: require 1 review + passing CI before merge to dev.
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 21
+  10
+Environment Setup & Developer Onboarding
+How to get from zero to running in one sitting
+Prerequisites (All Three People)
+• Python 3.11+ (use pyenv for version management)
+• Node.js 20+ (use nvm for version management)
+• Docker Desktop (or Docker + Docker Compose on Linux)
+• Git 2.40+
+• Ollama — download from ollama.ai and run: ollama pull llama3.1
+• VS Code with extensions: Python, ESLint, Prettier, GitLens, Docker
+First-Time Setup
+Step
+Details
+1. Clone repo
+git clone https://github.com/your-team/lawaid.git && cd lawaid
+2. Copy env file
+cp shared/docker/.env.example .env (fill in your values)
+3. Start services
+docker-compose -f shared/docker/docker-compose.yml up -d (starts PostgreSQL,
+MongoDB, Redis)
+4. Backend setup
+cd backend && python -m venv venv && source venv/bin/activate && pip install -r
+requirements.txt && alembic upgrade head
+5. AI setup
+cd ai && pip install -r requirements.txt && python scripts/build_bns_index.py
+6. Frontend setup
+cd frontend && npm install && cp .env.local.example .env.local
+7. Run all
+From root: make dev (or run each service separately in 3 terminals)
+8. Verify
+Open http://localhost:3000 — you should see the LawAid landing page
+Makefile Shortcuts (add to repo root)
+make dev # start all services in dev mode
+make test # run all tests (pytest + jest)
+make lint # run flake8 + eslint
+make migrate # run alembic upgrade head
+make seed-bns # rebuild BNS vector index
+make docker-up # docker-compose up -d
+make docker-down # docker-compose down
+Recommended VS Code Extensions
+ms-python.python · ms-python.black-formatter · bradlc.vscode-tailwindcss · dbaeumer.vscode-eslint ·
+esbenp.prettier-vscode · eamodio.gitlens · ms-azuretools.vscode-docker · humao.rest-client (for API testing in
+.http files)
+Final Notes
+
+---PAGE---
+LawAid — Implementation & Collaboration Guide
+Confidential · Team Document
+LawAid Project · Major Project 2025–26
+Page 22
+• The entire AI stack (Ollama + Llama 3.1) runs locally. No cloud API keys needed for the LLM.
+• For speech-to-text, run: pip install openai-whisper. Model downloads on first use (~1.5 GB for medium).
+• BNS dataset: collect from the official Ministry of Home Affairs (mha.gov.in) website or use a pre-processed
+JSON.
+• For the demo, you can use a smaller Llama 3.1 8B model. For production accuracy, use 70B (requires 40GB
+RAM).
+• All three people should run the full docker-compose stack locally. No sharing of a single dev server.
+Document prepared for LawAid Major Project Team · 2025–26 · All three members are equal contributors. Good luck!

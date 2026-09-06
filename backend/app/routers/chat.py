@@ -41,17 +41,8 @@ def send_message(body: ChatMessageRequest):
             dist = float(m.get("distance", 1.0))
             if dist < 0.75:
                 retrieved_sections.append(f"Section {m.get('section')}: {m.get('title')}")
-    except Exception:
-        # Fallback keyword match in standard BNS offences
-        lowered = user_msg.lower()
-        if "cheat" in lowered or "fraud" in lowered:
-            retrieved_sections.append("Section 318: Cheating (Bailable)")
-        elif "theft" in lowered or "steal" in lowered:
-            retrieved_sections.append("Section 303: Theft (Non-bailable)")
-        elif "threat" in lowered or "intimidat" in lowered:
-            retrieved_sections.append("Section 351: Criminal Intimidation (Bailable)")
-        elif "assault" in lowered or "hurt" in lowered:
-            retrieved_sections.append("Section 115: Voluntarily Causing Hurt")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"BNS Retrieval Error: {str(e)}")
 
     # Generate response via Groq if configured
     groq_key = os.environ.get("GROQ_API_KEY")
@@ -76,25 +67,10 @@ def send_message(body: ChatMessageRequest):
                 max_tokens=600,
             )
             bot_reply = completion.choices[0].message.content
-        except Exception:
-            bot_reply = ""
-
-    # Rule-based fallback if Groq is unavailable
-    if not bot_reply:
-        sec_text = (
-            f"Applicable BNS provisions identified:\n• " + "\n• ".join(retrieved_sections)
-            if retrieved_sections
-            else "Relevant provisions: General provisions under the Bharatiya Nyaya Sanhita (BNS), 2023."
-        )
-        bot_reply = (
-            f"Thank you for reaching out. Based on your inquiry, here is the relevant legal guidance:\n\n"
-            f"{sec_text}\n\n"
-            f"Key Citizen Rights:\n"
-            f"1. You have the right to file an FIR at any police station (Zero FIR provision under Section 173(1) BNSS).\n"
-            f"2. You are entitled to a free copy of the FIR immediately.\n"
-            f"3. For emergency police assistance, dial 112. For free government legal assistance, call NALSA at 15100.\n\n"
-            f"Disclaimer: This information is for educational guidance and does not replace consultation with a licensed advocate."
-        )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Groq LLM Error: {str(e)}")
+    else:
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured in environment.")
 
     # Record assistant reply
     _SESSIONS[session_id].append({"role": "assistant", "content": bot_reply})
