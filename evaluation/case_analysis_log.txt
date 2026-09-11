@@ -1,0 +1,481 @@
+=== CASE T01: Simple theft ===
+Incident: On 5 September 2026, an unknown person took the complainant's bicycle parked outside the grocery store without his consent.
+GT Supported: ['303']
+GT Uncertain: []
+Pred Supported: ['134', '303', '306', '314', '346']
+Pred Uncertain: ['303']
+Candidate Sections (Top 10): ['303', '134', '252', '306', '314', '348', '346', '188', '323']
+Candidate Doc IDs: ['bns_303_303(2)-2', 'bns_303_303(2)', 'bns_134', 'bns_252', 'bns_306', 'bns_314', 'bns_348', 'bns_346', 'bns_188', 'bns_323']
+TP (Supported): ['303']
+FP (Supported): ['134', '306', '314', '346']
+FN (Supported): []
+  Expected section 303 in candidates? True
+  LLM decisions for section 303: [('303(2)', 'uncertain', 'Property value is unstated in incident facts; proviso prerequisite is uncertain.'), ('303(2)', 'supported', 'Dishonest taking of movable property without consent established.')]
+
+================================================================================
+
+=== CASE T02: Theft with missing property value ===
+Incident: On 10 August 2026, at around 8 PM, an unknown man stole the complainant's mobile phone while he was standing at the bus stop.
+GT Supported: ['303']
+GT Uncertain: ['303(2)']
+Pred Supported: ['134', '303', '304', '305', '306']
+Pred Uncertain: ['303']
+Candidate Sections (Top 10): ['306', '304', '305', '303', '134', '252', '307', '317']
+Candidate Doc IDs: ['bns_306', 'bns_304', 'bns_305', 'bns_303_303(2)-2', 'bns_303_303(2)', 'bns_134', 'bns_252', 'bns_307', 'bns_317_317(2)', 'bns_317_317(5)']
+TP (Supported): ['303']
+FP (Supported): ['134', '304', '305', '306']
+FN (Supported): []
+  Expected section 303 in candidates? True
+  LLM decisions for section 303: [('303(2)', 'uncertain', 'Property value is unstated in incident facts; proviso prerequisite is uncertain.'), ('303(2)', 'supported', 'Dishonest taking of movable property without consent established.')]
+
+================================================================================
+
+=== CASE T03: Theft explicitly below ₹5,000 ===
+Incident: On 12 August 2026, an unknown person stole a cheap plastic watch valued at 800 rupees from the complainant's desk.
+GT Supported: ['303']
+GT Uncertain: []
+Pred Supported: ['303', '304', '306']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['188', '306', '252', '303', '218', '304', '348', '187', '205']
+Candidate Doc IDs: ['bns_188', 'bns_306', 'bns_252', 'bns_303_303(2)-2', 'bns_218', 'bns_303_303(2)', 'bns_304', 'bns_348', 'bns_187', 'bns_205']
+TP (Supported): ['303']
+FP (Supported): ['304', '306']
+FN (Supported): []
+  Expected section 303 in candidates? True
+  LLM decisions for section 303: [('303(2)', 'supported', 'Property value explicitly stated below 5,000 rupees threshold.'), ('303(2)', 'supported', 'Dishonest taking of movable property without consent established.')]
+
+================================================================================
+
+=== CASE T04: Snatching ===
+Incident: On 15 August 2026, two men on a speed motorcycle rode past the complainant and suddenly grabbed her gold chain from her neck with force and sped away.
+GT Supported: ['304']
+GT Uncertain: []
+Pred Supported: ['126', '134', '281', '303']
+Pred Uncertain: ['303']
+Candidate Sections (Top 10): ['303', '188', '281', '129', '134', '252', '126', '85', '74']
+Candidate Doc IDs: ['bns_303_303(2)-2', 'bns_188', 'bns_303_303(2)', 'bns_281', 'bns_129', 'bns_134', 'bns_252', 'bns_126', 'bns_85', 'bns_74']
+TP (Supported): []
+FP (Supported): ['126', '134', '281', '303']
+FN (Supported): ['304']
+  Expected section 304 in candidates? False
+
+================================================================================
+
+=== CASE T05: Robbery ===
+Incident: On 20 August 2026, an assailant threatened the victim at knifepoint, stating 'Hand over your wallet immediately or I will stab you', and forcibly took the wallet.
+GT Supported: ['309']
+GT Uncertain: []
+Pred Supported: ['130', '134', '309']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['134', '312', '130', '309', '32', '311', '307']
+Candidate Doc IDs: ['bns_134', 'bns_312', 'bns_130', 'bns_309_309(6)', 'bns_32', 'bns_309_309(5)', 'bns_311', 'bns_309_309(4)', 'bns_309_309(4)-2', 'bns_307']
+TP (Supported): ['309']
+FP (Supported): ['130', '134']
+FN (Supported): []
+  Expected section 309 in candidates? True
+  LLM decisions for section 309: [('309(6)', 'supported', 'Theft accompanied by instant fear of death or hurt.'), ('309(5)', 'supported', 'Theft accompanied by instant fear of death or hurt.'), ('309(4)', 'supported', 'Theft accompanied by instant fear of death or hurt.'), ('309(4)', 'supported', 'Theft accompanied by instant fear of death or hurt.')]
+
+================================================================================
+
+=== CASE T06: Assault ===
+Incident: On 22 August 2026, during an argument at a tea stall, the accused raised his fist and charged towards the complainant, creating apprehension that he was about to strike him.
+GT Supported: ['130']
+GT Uncertain: []
+Pred Supported: ['130', '136']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['130', '194', '352', '135', '136', '74', '267', '122', '312', '192']
+Candidate Doc IDs: ['bns_130', 'bns_194', 'bns_352', 'bns_135', 'bns_136', 'bns_74', 'bns_267', 'bns_122_122(2)', 'bns_312', 'bns_192_192']
+TP (Supported): ['130']
+FP (Supported): ['136']
+FN (Supported): []
+  Expected section 130 in candidates? True
+  LLM decisions for section 130: [('', 'supported', 'Gesture causing apprehension of criminal force.')]
+
+================================================================================
+
+=== CASE T07: Voluntarily causing hurt ===
+Incident: On 25 August 2026, during a altercation over parking, the accused punched the complainant in the face, causing a bloody nose and severe facial pain.
+GT Supported: ['115']
+GT Uncertain: []
+Pred Supported: ['115', '130', '136']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['117', '122', '130', '135', '136', '352', '115']
+Candidate Doc IDs: ['bns_117_117(2)', 'bns_117_117(3)', 'bns_122_122(2)', 'bns_122_122(1)', 'bns_130', 'bns_117_117(4)', 'bns_135', 'bns_136', 'bns_352', 'bns_115']
+TP (Supported): ['115']
+FP (Supported): ['130', '136']
+FN (Supported): []
+  Expected section 115 in candidates? True
+  LLM decisions for section 115: [('', 'supported', 'Voluntarily causing bodily pain or hurt established.')]
+
+================================================================================
+
+=== CASE T08: Assault + theft ===
+Incident: On 28 August 2026, an unknown man slapped the complainant across the face and immediately grabbed his mobile phone and fled.
+GT Supported: ['134', '303']
+GT Uncertain: []
+Pred Supported: ['130', '134', '136']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['194', '136', '130', '135', '134', '261', '355', '74', '225', '32']
+Candidate Doc IDs: ['bns_194', 'bns_136', 'bns_130', 'bns_135', 'bns_134', 'bns_261', 'bns_355', 'bns_74', 'bns_225', 'bns_32']
+TP (Supported): ['134']
+FP (Supported): ['130', '136']
+FN (Supported): ['303']
+  Expected section 134 in candidates? True
+  LLM decisions for section 134: [('', 'supported', 'Assault or criminal force used in attempting theft of property carried.')]
+  Expected section 303 in candidates? False
+
+================================================================================
+
+=== CASE T09: Force used specifically to facilitate theft ===
+Incident: On 1 September 2026, a stranger punched the victim in the chest in order to knock him down so he could snatch his leather bag.
+GT Supported: ['134', '304']
+GT Uncertain: ['309']
+Pred Supported: ['130', '134', '136']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['134', '136', '130', '135', '311', '133', '74', '312', '252', '131']
+Candidate Doc IDs: ['bns_134', 'bns_136', 'bns_130', 'bns_135', 'bns_311', 'bns_133', 'bns_74', 'bns_312', 'bns_252', 'bns_131']
+TP (Supported): ['134']
+FP (Supported): ['130', '136']
+FN (Supported): ['304']
+  Expected section 134 in candidates? True
+  LLM decisions for section 134: [('', 'supported', 'Assault or criminal force used in attempting theft of property carried.')]
+  Expected section 304 in candidates? False
+
+================================================================================
+
+=== CASE T10: Ambiguous force + theft ===
+Incident: On 3 September 2026, the complainant was shoved during a crowded market commotion. A few minutes later, he noticed his wallet was missing from his pocket.
+GT Supported: ['303']
+GT Uncertain: ['134', '309']
+Pred Supported: ['303']
+Pred Uncertain: ['134', '303', '309']
+Candidate Sections (Top 10): ['303', '188', '187', '252', '134', '307', '219', '177', '309']
+Candidate Doc IDs: ['bns_303_303(2)-2', 'bns_188', 'bns_187', 'bns_303_303(2)', 'bns_252', 'bns_134', 'bns_307', 'bns_219', 'bns_177', 'bns_309_309(6)']
+TP (Supported): ['303']
+FP (Supported): []
+FN (Supported): []
+  Expected section 303 in candidates? True
+  LLM decisions for section 303: [('303(2)', 'uncertain', 'Property value is unstated in incident facts; proviso prerequisite is uncertain.'), ('303(2)', 'supported', 'Dishonest taking of movable property without consent established.')]
+
+================================================================================
+
+=== CASE T11: Rash driving on public road ===
+Incident: On 5 September 2026, a driver drove a motor car at 120 km/h through a crowded market street, zigzagging dangerously and endangering pedestrians, though no person was hit.
+GT Supported: ['281']
+GT Uncertain: []
+Pred Supported: ['106', '126', '281']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['281', '285', '282', '106', '18', '100', '126', '101']
+Candidate Doc IDs: ['bns_281', 'bns_285', 'bns_282', 'bns_106_106(2)', 'bns_18', 'bns_100', 'bns_126', 'bns_106_106(1)', 'bns_106_106(1)-2', 'bns_101']
+TP (Supported): ['281']
+FP (Supported): ['106', '126']
+FN (Supported): []
+  Expected section 281 in candidates? True
+  LLM decisions for section 281: [('', 'supported', 'Rash driving on public road endangering human life.')]
+
+================================================================================
+
+=== CASE T12: Road accident causing hurt ===
+Incident: On 7 September 2026, a speeding car collided with a motorcycle from behind on MG Road, causing the motorcyclist to fall and suffer leg fractures and injuries.
+GT Supported: ['125', '281']
+GT Uncertain: []
+Pred Supported: ['106', '115', '281']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['281', '106', '18', '285', '289', '311', '115', '123']
+Candidate Doc IDs: ['bns_281', 'bns_106_106(2)', 'bns_106_106(1)', 'bns_18', 'bns_106_106(1)-2', 'bns_285', 'bns_289', 'bns_311', 'bns_115', 'bns_123']
+TP (Supported): ['281']
+FP (Supported): ['106', '115']
+FN (Supported): ['125']
+  Expected section 125 in candidates? False
+  Expected section 281 in candidates? True
+  LLM decisions for section 281: [('', 'supported', 'Rash driving on public road endangering human life.')]
+
+================================================================================
+
+=== CASE T13: Road accident with death ===
+Incident: On 8 September 2026, a rashly driven truck hit a pedestrian crossing the road, resulting in the instant death of the pedestrian.
+GT Supported: ['106', '281']
+GT Uncertain: []
+Pred Supported: ['106', '281']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['18', '106', '92', '281', '102', '100', '90', '311']
+Candidate Doc IDs: ['bns_18', 'bns_106_106(2)', 'bns_106_106(1)', 'bns_106_106(1)-2', 'bns_92', 'bns_281', 'bns_102', 'bns_100', 'bns_90_90(1)', 'bns_311']
+TP (Supported): ['106', '281']
+FP (Supported): []
+FN (Supported): []
+  Expected section 106 in candidates? True
+  LLM decisions for section 106: [('106(2)', 'supported', 'Causing death by rash or negligent act.'), ('106(1)', 'supported', 'Causing death by rash or negligent act.'), ('106(1)', 'supported', 'Causing death by rash or negligent act.')]
+  Expected section 281 in candidates? True
+  LLM decisions for section 281: [('', 'supported', 'Rash driving on public road endangering human life.')]
+
+================================================================================
+
+=== CASE T14: Wrongful restraint ===
+Incident: On 10 September 2026, the accused physically stood in front of the complainant's doorway and blocked him from leaving his office room, preventing him from moving in that direction.
+GT Supported: ['126']
+GT Uncertain: []
+Pred Supported: ['126', '127']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['262', '261', '221', '265', '135', '126', '267', '127', '157']
+Candidate Doc IDs: ['bns_262', 'bns_261', 'bns_221', 'bns_265', 'bns_135', 'bns_126', 'bns_267', 'bns_127_127(6)', 'bns_157', 'bns_127_127(5)']
+TP (Supported): ['126']
+FP (Supported): ['127']
+FN (Supported): []
+  Expected section 126 in candidates? True
+  LLM decisions for section 126: [('', 'supported', 'Obstructing person from proceeding in direction.')]
+
+================================================================================
+
+=== CASE T15: Wrongful confinement ===
+Incident: On 12 September 2026, the accused locked the complainant inside a storage room from the outside for three hours, preventing him from proceeding beyond circumscribed limits.
+GT Supported: ['127']
+GT Uncertain: []
+Pred Supported: ['127']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['127', '11', '12', '261']
+Candidate Doc IDs: ['bns_127_127(6)', 'bns_127_127(3)', 'bns_127_127(7)', 'bns_127_127(8)', 'bns_127_127(5)', 'bns_127_127(2)', 'bns_127_127(4)', 'bns_11', 'bns_12', 'bns_261']
+TP (Supported): ['127']
+FP (Supported): []
+FN (Supported): []
+  Expected section 127 in candidates? True
+  LLM decisions for section 127: [('127(6)', 'supported', 'Wrongfully restraining person within circumscribed limits.'), ('127(3)', 'supported', 'Wrongfully restraining person within circumscribed limits.'), ('127(7)', 'supported', 'Wrongfully restraining person within circumscribed limits.'), ('127(8)', 'supported', 'Wrongfully restraining person within circumscribed limits.'), ('127(5)', 'supported', 'Wrongfully restraining person within circumscribed limits.'), ('127(2)', 'supported', 'Wrongfully restraining person within circumscribed limits.'), ('127(4)', 'supported', 'Wrongfully restraining person within circumscribed limits.')]
+
+================================================================================
+
+=== CASE T16: Cheating ===
+Incident: On 14 September 2026, the accused fraudulently induced the complainant to pay 50,000 rupees by promising a government job with fake employment documents.
+GT Supported: ['318']
+GT Uncertain: []
+Pred Supported: ['217']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['205', '176', '344', '246', '247', '217', '335', '245', '212', '228']
+Candidate Doc IDs: ['bns_205', 'bns_176', 'bns_344', 'bns_246', 'bns_247', 'bns_217', 'bns_335', 'bns_245', 'bns_212_212(a)', 'bns_228']
+TP (Supported): []
+FP (Supported): ['217']
+FN (Supported): ['318']
+  Expected section 318 in candidates? False
+
+================================================================================
+
+=== CASE T17: Criminal intimidation ===
+Incident: On 16 September 2026, the accused threatened the complainant saying 'If you testify in court tomorrow, I will burn down your house and kill your family'.
+GT Supported: ['351']
+GT Uncertain: []
+Pred Supported: ['351']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['232', '351', '258', '32', '333', '226', '246']
+Candidate Doc IDs: ['bns_232_232(1)', 'bns_232_232(2)', 'bns_351_351(3)', 'bns_351_351(4)', 'bns_351_351(2)', 'bns_258', 'bns_32', 'bns_333', 'bns_226', 'bns_246']
+TP (Supported): ['351']
+FP (Supported): []
+FN (Supported): []
+  Expected section 351 in candidates? True
+  LLM decisions for section 351: [('351(3)', 'supported', 'Threatening injury to person/property causing alarm.'), ('351(4)', 'supported', 'Threatening injury to person/property causing alarm.'), ('351(2)', 'supported', 'Threatening injury to person/property causing alarm.')]
+
+================================================================================
+
+=== CASE T18: Criminal breach/misappropriation of property ===
+Incident: On 18 September 2026, the complainant entrusted his laptop to his friend for temporary work use, but the friend dishonestly sold the laptop and kept the money.
+GT Supported: ['316']
+GT Uncertain: []
+Pred Supported: ['314']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['314', '252', '315', '335', '320', '323', '322', '247', '246']
+Candidate Doc IDs: ['bns_314', 'bns_252', 'bns_315_315-2', 'bns_315_315', 'bns_335', 'bns_320', 'bns_323', 'bns_322', 'bns_247', 'bns_246']
+TP (Supported): []
+FP (Supported): ['314']
+FN (Supported): ['316']
+  Expected section 316 in candidates? False
+
+================================================================================
+
+=== CASE T19: Theft by employee/clerk ===
+Incident: On 20 September 2026, an accountant employed at a private firm dishonestly took 40,000 rupees cash from the office safe in his master's possession.
+GT Supported: ['306']
+GT Uncertain: []
+Pred Supported: ['306', '314', '316']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['306', '177', '314', '344', '316', '320', '323']
+Candidate Doc IDs: ['bns_306', 'bns_177', 'bns_314', 'bns_344', 'bns_316_316(4)', 'bns_316_316(5)', 'bns_316_316(3)', 'bns_316_316(2)', 'bns_320', 'bns_323']
+TP (Supported): ['306']
+FP (Supported): ['314', '316']
+FN (Supported): []
+  Expected section 306 in candidates? True
+  LLM decisions for section 306: [('', 'supported', "Theft by clerk or servant of master's property.")]
+
+================================================================================
+
+=== CASE T20: Theft in dwelling house ===
+Incident: On 22 September 2026, an intruder entered the complainant's residential house during the afternoon and stole jewelry from the bedroom closet.
+GT Supported: ['305']
+GT Uncertain: ['329', '331']
+Pred Supported: ['134', '303', '305', '306']
+Pred Uncertain: ['303']
+Candidate Sections (Top 10): ['305', '306', '134', '252', '330', '303', '307', '317']
+Candidate Doc IDs: ['bns_305', 'bns_306', 'bns_134', 'bns_252', 'bns_330', 'bns_303_303(2)-2', 'bns_303_303(2)', 'bns_307', 'bns_317_317(2)', 'bns_317_317(5)']
+TP (Supported): ['305']
+FP (Supported): ['134', '303', '306']
+FN (Supported): []
+  Expected section 305 in candidates? True
+  LLM decisions for section 305: [('', 'supported', 'Theft committed in dwelling house.')]
+
+================================================================================
+
+=== CASE T21: Organised/petty organised crime scenario ===
+Incident: On 24 September 2026, a member of a known local gang engaged in systematic street pickpocketing and mobile snatching as part of an organized crime group operation.
+GT Supported: ['112', '304']
+GT Uncertain: ['111']
+Pred Supported: ['112', '304']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['112', '304', '111', '313']
+Candidate Doc IDs: ['bns_112', 'bns_304', 'bns_111_111(7)', 'bns_111_111(6)', 'bns_111_111(5)', 'bns_111_111(3)', 'bns_111_111(4)', 'bns_111_111(2) (a)', 'bns_111_111(2) (b)', 'bns_313']
+TP (Supported): ['112', '304']
+FP (Supported): []
+FN (Supported): []
+  Expected section 112 in candidates? True
+  LLM decisions for section 112: [('', 'supported', 'Petty organised crime committed by group.')]
+  Expected section 304 in candidates? True
+  LLM decisions for section 304: [('', 'supported', 'Theft by sudden, quick, or forcible seizure of property carried.')]
+
+================================================================================
+
+=== CASE T22: False information to public servant ===
+Incident: On 26 September 2026, a man gave false information to the police officer at the station claiming his neighbor committed a robbery, knowing the statement to be false, intending to cause the officer to use lawful power to annoy the neighbor.
+GT Supported: ['217']
+GT Uncertain: []
+Pred Supported: ['217']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['175', '217', '236', '233', '216', '234', '237', '242', '212', '240']
+Candidate Doc IDs: ['bns_175', 'bns_217', 'bns_236', 'bns_233', 'bns_216', 'bns_234', 'bns_237', 'bns_242', 'bns_212_212(a)', 'bns_240']
+TP (Supported): ['217']
+FP (Supported): []
+FN (Supported): []
+  Expected section 217 in candidates? True
+  LLM decisions for section 217: [('', 'supported', 'Giving false information to public servant.')]
+
+================================================================================
+
+=== CASE T23: A sexual-offence-related case ===
+Incident: On 28 September 2026, an accused repeatedly followed a woman online and in person, sending unwanted explicit messages despite her clear refusal.
+GT Supported: ['78']
+GT Uncertain: []
+Pred Supported: ['78']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['78', '238', '84', '81', '232', '74', '262']
+Candidate Doc IDs: ['bns_78_78(2)', 'bns_78_78(2)-2', 'bns_238_238(a)', 'bns_238_238(c)', 'bns_84', 'bns_238_238(b)', 'bns_81', 'bns_232_232(2)', 'bns_74', 'bns_262']
+TP (Supported): ['78']
+FP (Supported): []
+FN (Supported): []
+  Expected section 78 in candidates? True
+  LLM decisions for section 78: [('78(2)', 'supported', 'Stalking woman despite disinterest.'), ('78(2)', 'supported', 'Stalking woman despite disinterest.')]
+
+================================================================================
+
+=== CASE T24: A property-mark offence ===
+Incident: On 30 September 2026, the accused removed and defaced the official serial brand mark stamped on industrial machinery owned by the complainant with intent to cause injury.
+GT Supported: ['346']
+GT Uncertain: []
+Pred Supported: ['346']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['346', '185', '345', '348', '347', '183', '188', '241', '349']
+Candidate Doc IDs: ['bns_346', 'bns_185', 'bns_345', 'bns_348', 'bns_347_347(1)', 'bns_347_347(2)', 'bns_183', 'bns_188', 'bns_241', 'bns_349']
+TP (Supported): ['346']
+FP (Supported): []
+FN (Supported): []
+  Expected section 346 in candidates? True
+  LLM decisions for section 346: [('', 'supported', 'Tampering with property mark.')]
+
+================================================================================
+
+=== CASE T25: A case involving grave/sudden provocation ===
+Incident: On 2 October 2026, after being suddenly slapped without warning, the victim lost self-control under grave and sudden provocation and pushed the aggressor.
+GT Supported: ['136']
+GT Uncertain: []
+Pred Supported: ['130', '136']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['136', '130', '74', '122', '133', '135', '131', '194', '32']
+Candidate Doc IDs: ['bns_136', 'bns_130', 'bns_74', 'bns_122_122(2)', 'bns_122_122(1)', 'bns_133', 'bns_135', 'bns_131', 'bns_194', 'bns_32']
+TP (Supported): ['136']
+FP (Supported): ['130']
+FN (Supported): []
+  Expected section 136 in candidates? True
+  LLM decisions for section 136: [('', 'supported', 'Assault on grave and sudden provocation.')]
+
+================================================================================
+
+=== CASE T26: A case where important statutory facts are missing ===
+Incident: On 4 October 2026, the complainant reported that something suspicious happened near his vehicle in the parking lot, but could not describe any act, loss, or perpetrator.
+GT Supported: []
+GT Uncertain: []
+Pred Supported: ['346']
+Pred Uncertain: ['303']
+Candidate Sections (Top 10): ['346', '22', '23', '18', '238', '239', '303', '219', '345']
+Candidate Doc IDs: ['bns_346', 'bns_22', 'bns_23', 'bns_18', 'bns_238_238(a)', 'bns_239', 'bns_303_303(2)-2', 'bns_219', 'bns_238_238(c)', 'bns_345']
+TP (Supported): []
+FP (Supported): ['346']
+FN (Supported): []
+
+================================================================================
+
+=== CASE T27: A case designed to trigger a likely retrieval false positive ===
+Incident: On 6 October 2026, a car collided with a motorcycle on a city road. The driver stopped immediately and rendered help. The incident involved no ship, boat, vessel, or water navigation.
+GT Supported: ['281']
+GT Uncertain: []
+Pred Supported: ['281']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['18', '282', '281', '284', '285', '19', '22', '23', '328', '129']
+Candidate Doc IDs: ['bns_18', 'bns_282', 'bns_281', 'bns_284', 'bns_285', 'bns_19', 'bns_22', 'bns_23', 'bns_328', 'bns_129']
+TP (Supported): ['281']
+FP (Supported): []
+FN (Supported): []
+  Expected section 281 in candidates? True
+  LLM decisions for section 281: [('', 'supported', 'Rash driving on public road endangering human life.')]
+
+================================================================================
+
+=== CASE T28: Another ambiguous case ===
+Incident: On 8 October 2026, the complainant found a gold ring lying on a public sidewalk. He picked it up and put it in his pocket without attempting to find the owner.
+GT Supported: ['314']
+GT Uncertain: ['303']
+Pred Supported: ['314', '346']
+Pred Uncertain: ['303']
+Candidate Sections (Top 10): ['252', '188', '303', '314', '187', '348', '345', '184', '346']
+Candidate Doc IDs: ['bns_252', 'bns_188', 'bns_303_303(2)-2', 'bns_303_303(2)', 'bns_314', 'bns_187', 'bns_348', 'bns_345', 'bns_184', 'bns_346']
+TP (Supported): ['314']
+FP (Supported): ['346']
+FN (Supported): []
+  Expected section 314 in candidates? True
+  LLM decisions for section 314: [('', 'supported', 'Dishonest misappropriation of lost property.')]
+
+================================================================================
+
+=== CASE T29: A multi-offence incident ===
+Incident: On 10 October 2026, the accused broke the lock of a residential house at night, entered inside, punched the house owner causing bodily pain, and stole 20,000 rupees cash.
+GT Supported: ['115', '305', '331']
+GT Uncertain: []
+Pred Supported: ['134', '136', '305', '306', '346']
+Pred Uncertain: []
+Candidate Sections (Top 10): ['134', '305', '135', '306', '346', '252', '307', '218', '136', '312']
+Candidate Doc IDs: ['bns_134', 'bns_305', 'bns_135', 'bns_306', 'bns_346', 'bns_252', 'bns_307', 'bns_218', 'bns_136', 'bns_312']
+TP (Supported): ['305']
+FP (Supported): ['134', '136', '306', '346']
+FN (Supported): ['115', '331']
+  Expected section 115 in candidates? False
+  Expected section 305 in candidates? True
+  LLM decisions for section 305: [('', 'supported', 'Theft committed in dwelling house.')]
+  Expected section 331 in candidates? False
+
+================================================================================
+
+=== CASE T30: A completely unrelated/non-criminal incident ===
+Incident: On 12 October 2026, the complainant and his landlord had a disagreement regarding the monthly rent increase specified in their tenancy lease contract.
+GT Supported: []
+GT Uncertain: []
+Pred Supported: []
+Pred Uncertain: []
+Candidate Sections (Top 10): ['293', '218', '219', '81', '215', '220', '43', '194', '300', '280']
+Candidate Doc IDs: ['bns_293', 'bns_218', 'bns_219', 'bns_81', 'bns_215', 'bns_220', 'bns_43', 'bns_194', 'bns_300', 'bns_280']
+TP (Supported): []
+FP (Supported): []
+FN (Supported): []
+
+================================================================================

@@ -1,0 +1,242 @@
+[
+  {
+    "id": "T01",
+    "category": "Simple theft",
+    "incident": "On 5 September 2026, an unknown person took the complainant's bicycle parked outside the grocery store without his consent.",
+    "expected_supported": ["303"],
+    "expected_uncertain": [],
+    "notes": "Classic BNS Section 303 (Theft) case. Moving movable property out of possession without consent."
+  },
+  {
+    "id": "T02",
+    "category": "Theft with missing property value",
+    "incident": "On 10 August 2026, at around 8 PM, an unknown man stole the complainant's mobile phone while he was standing at the bus stop.",
+    "expected_supported": ["303"],
+    "expected_uncertain": ["303(2)"],
+    "notes": "Core theft under Section 303 is supported, but specific sub-clause proviso for property value < 5,000 rupees must be uncertain as value is unstated."
+  },
+  {
+    "id": "T03",
+    "category": "Theft explicitly below ₹5,000",
+    "incident": "On 12 August 2026, an unknown person stole a cheap plastic watch valued at 800 rupees from the complainant's desk.",
+    "expected_supported": ["303"],
+    "expected_uncertain": [],
+    "notes": "Theft under Section 303 with explicit monetary value of 800 rupees (< 5,000 rupees threshold)."
+  },
+  {
+    "id": "T04",
+    "category": "Snatching",
+    "incident": "On 15 August 2026, two men on a speed motorcycle rode past the complainant and suddenly grabbed her gold chain from her neck with force and sped away.",
+    "expected_supported": ["304"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 304 (Snatching): Theft by sudden, quick, or forcible seizure of property worn/carried."
+  },
+  {
+    "id": "T05",
+    "category": "Robbery",
+    "incident": "On 20 August 2026, an assailant threatened the victim at knifepoint, stating 'Hand over your wallet immediately or I will stab you', and forcibly took the wallet.",
+    "expected_supported": ["309"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 309 (Robbery): Theft accompanied by instant fear of death or hurt caused for that end."
+  },
+  {
+    "id": "T06",
+    "category": "Assault",
+    "incident": "On 22 August 2026, during an argument at a tea stall, the accused raised his fist and charged towards the complainant, creating apprehension that he was about to strike him.",
+    "expected_supported": ["130"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 130 (Assault): Making a gesture or preparation causing apprehension of criminal force."
+  },
+  {
+    "id": "T07",
+    "category": "Voluntarily causing hurt",
+    "incident": "On 25 August 2026, during a altercation over parking, the accused punched the complainant in the face, causing a bloody nose and severe facial pain.",
+    "expected_supported": ["115"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 115 (Voluntarily causing hurt): Act done with intention/knowledge of causing bodily pain or hurt."
+  },
+  {
+    "id": "T08",
+    "category": "Assault + theft",
+    "incident": "On 28 August 2026, an unknown man slapped the complainant across the face and immediately grabbed his mobile phone and fled.",
+    "expected_supported": ["134", "303"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 134 (Assault/criminal force in attempt to commit theft of property carried) and BNS Section 303 (Theft)."
+  },
+  {
+    "id": "T09",
+    "category": "Force used specifically to facilitate theft",
+    "incident": "On 1 September 2026, a stranger punched the victim in the chest in order to knock him down so he could snatch his leather bag.",
+    "expected_supported": ["134", "304"],
+    "expected_uncertain": ["309"],
+    "notes": "Explicit force used to facilitate theft of property carried by victim (Section 134 / Section 304). Section 309 Robbery is uncertain."
+  },
+  {
+    "id": "T10",
+    "category": "Ambiguous force + theft",
+    "incident": "On 3 September 2026, the complainant was shoved during a crowded market commotion. A few minutes later, he noticed his wallet was missing from his pocket.",
+    "expected_supported": ["303"],
+    "expected_uncertain": ["134", "309"],
+    "notes": "Theft (Section 303) is supported. Criminal force / robbery connection is uncertain due to ambiguous sequence and intent."
+  },
+  {
+    "id": "T11",
+    "category": "Rash driving on public road",
+    "incident": "On 5 September 2026, a driver drove a motor car at 120 km/h through a crowded market street, zigzagging dangerously and endangering pedestrians, though no person was hit.",
+    "expected_supported": ["281"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 281 (Rash driving or riding on a public way endangering human life or safety)."
+  },
+  {
+    "id": "T12",
+    "category": "Road accident causing hurt",
+    "incident": "On 7 September 2026, a speeding car collided with a motorcycle from behind on MG Road, causing the motorcyclist to fall and suffer leg fractures and injuries.",
+    "expected_supported": ["281", "125"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 281 (Rash driving) and BNS Section 125 (Act endangering life or personal safety of others / causing hurt)."
+  },
+  {
+    "id": "T13",
+    "category": "Road accident with death",
+    "incident": "On 8 September 2026, a rashly driven truck hit a pedestrian crossing the road, resulting in the instant death of the pedestrian.",
+    "expected_supported": ["281", "106"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 281 (Rash driving) and BNS Section 106 (Causing death by negligence)."
+  },
+  {
+    "id": "T14",
+    "category": "Wrongful restraint",
+    "incident": "On 10 September 2026, the accused physically stood in front of the complainant's doorway and blocked him from leaving his office room, preventing him from moving in that direction.",
+    "expected_supported": ["126"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 126 (Wrongful restraint): Voluntarily obstructing a person so as to prevent him from proceeding in any direction."
+  },
+  {
+    "id": "T15",
+    "category": "Wrongful confinement",
+    "incident": "On 12 September 2026, the accused locked the complainant inside a storage room from the outside for three hours, preventing him from proceeding beyond circumscribed limits.",
+    "expected_supported": ["127"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 127 (Wrongful confinement): Wrongfully restraining a person in such a manner as to prevent that person from proceeding beyond certain circumscribed limits."
+  },
+  {
+    "id": "T16",
+    "category": "Cheating",
+    "incident": "On 14 September 2026, the accused fraudulently induced the complainant to pay 50,000 rupees by promising a government job with fake employment documents.",
+    "expected_supported": ["318"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 318 (Cheating): Deceiving a person and fraudulently/dishonestly inducing delivery of property/money."
+  },
+  {
+    "id": "T17",
+    "category": "Criminal intimidation",
+    "incident": "On 16 September 2026, the accused threatened the complainant saying 'If you testify in court tomorrow, I will burn down your house and kill your family'.",
+    "expected_supported": ["351"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 351 (Criminal intimidation): Threatening another with injury to person, reputation, or property with intent to cause alarm."
+  },
+  {
+    "id": "T18",
+    "category": "Criminal breach/misappropriation of property",
+    "incident": "On 18 September 2026, the complainant entrusted his laptop to his friend for temporary work use, but the friend dishonestly sold the laptop and kept the money.",
+    "expected_supported": ["316"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 316 (Criminal breach of trust): Dishonest misappropriation of property entrusted to a person."
+  },
+  {
+    "id": "T19",
+    "category": "Theft by employee/clerk",
+    "incident": "On 20 September 2026, an accountant employed at a private firm dishonestly took 40,000 rupees cash from the office safe in his master's possession.",
+    "expected_supported": ["306"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 306 (Theft by clerk or servant of property in possession of master)."
+  },
+  {
+    "id": "T20",
+    "category": "Theft in dwelling house",
+    "incident": "On 22 September 2026, an intruder entered the complainant's residential house during the afternoon and stole jewelry from the bedroom closet.",
+    "expected_supported": ["305"],
+    "expected_uncertain": ["329", "331"],
+    "notes": "BNS Section 305 (Theft in a dwelling house). Trespass/house-breaking provisions may be uncertain if entry method is unstated."
+  },
+  {
+    "id": "T21",
+    "category": "Organised/petty organised crime scenario",
+    "incident": "On 24 September 2026, a member of a known local gang engaged in systematic street pickpocketing and mobile snatching as part of an organized crime group operation.",
+    "expected_supported": ["112", "304"],
+    "expected_uncertain": ["111"],
+    "notes": "BNS Section 112 (Petty organised crime) and BNS Section 304 (Snatching)."
+  },
+  {
+    "id": "T22",
+    "category": "False information to public servant",
+    "incident": "On 26 September 2026, a man gave false information to the police officer at the station claiming his neighbor committed a robbery, knowing the statement to be false, intending to cause the officer to use lawful power to annoy the neighbor.",
+    "expected_supported": ["217"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 217 (Giving false information to public servant with intent to cause use of lawful power to injury/annoyance)."
+  },
+  {
+    "id": "T23",
+    "category": "A sexual-offence-related case",
+    "incident": "On 28 September 2026, an accused repeatedly followed a woman online and in person, sending unwanted explicit messages despite her clear refusal.",
+    "expected_supported": ["78"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 78 (Stalking): Following a woman and contacting/attempting to contact her despite clear disinterest."
+  },
+  {
+    "id": "T24",
+    "category": "A property-mark offence",
+    "incident": "On 30 September 2026, the accused removed and defaced the official serial brand mark stamped on industrial machinery owned by the complainant with intent to cause injury.",
+    "expected_supported": ["346"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 346 (Tampering with property mark with intent to cause injury)."
+  },
+  {
+    "id": "T25",
+    "category": "A case involving grave/sudden provocation",
+    "incident": "On 2 October 2026, after being suddenly slapped without warning, the victim lost self-control under grave and sudden provocation and pushed the aggressor.",
+    "expected_supported": ["136"],
+    "expected_uncertain": [],
+    "notes": "BNS Section 136 (Assault or criminal force on grave and sudden provocation)."
+  },
+  {
+    "id": "T26",
+    "category": "A case where important statutory facts are missing",
+    "incident": "On 4 October 2026, the complainant reported that something suspicious happened near his vehicle in the parking lot, but could not describe any act, loss, or perpetrator.",
+    "expected_supported": [],
+    "expected_uncertain": [],
+    "notes": "No core statutory elements established. Zero supported sections expected."
+  },
+  {
+    "id": "T27",
+    "category": "A case designed to trigger a likely retrieval false positive",
+    "incident": "On 6 October 2026, a car collided with a motorcycle on a city road. The driver stopped immediately and rendered help. The incident involved no ship, boat, vessel, or water navigation.",
+    "expected_supported": ["281"],
+    "expected_uncertain": [],
+    "notes": "Designed to test false-positive resistance against BNS Section 282 (Rash navigation of vessel). Only Section 281 is supported."
+  },
+  {
+    "id": "T28",
+    "category": "Another ambiguous case",
+    "incident": "On 8 October 2026, the complainant found a gold ring lying on a public sidewalk. He picked it up and put it in his pocket without attempting to find the owner.",
+    "expected_supported": ["314"],
+    "expected_uncertain": ["303"],
+    "notes": "BNS Section 314 (Dishonest misappropriation of property). Theft under Section 303 is uncertain as initial possession was not taken out of another's active custody."
+  },
+  {
+    "id": "T29",
+    "category": "A multi-offence incident",
+    "incident": "On 10 October 2026, the accused broke the lock of a residential house at night, entered inside, punched the house owner causing bodily pain, and stole 20,000 rupees cash.",
+    "expected_supported": ["305", "115", "331"],
+    "expected_uncertain": [],
+    "notes": "Multi-offence incident: Section 305 (Theft in dwelling house), Section 115 (Hurt), Section 331 (Lurking house-trespass or house-breaking at night)."
+  },
+  {
+    "id": "T30",
+    "category": "A completely unrelated/non-criminal incident",
+    "incident": "On 12 October 2026, the complainant and his landlord had a disagreement regarding the monthly rent increase specified in their tenancy lease contract.",
+    "expected_supported": [],
+    "expected_uncertain": [],
+    "notes": "Civil tenancy/contractual dispute with no criminal statutory offences established."
+  }
+]

@@ -1,0 +1,31 @@
+Case_ID,Category,Expected_Supported,Predicted_Supported,Expected_Uncertain,Predicted_Uncertain,TP,FP,FN,Exact_Match
+T01,Simple theft,303,303,,303,1,0,0,PASS
+T02,Theft with missing property value,303,303,303(2),"303, 304",1,0,0,PASS
+T03,"Theft explicitly below ₹5,000",303,303,,,1,0,0,PASS
+T04,Snatching,304,304,,"303, 309",1,0,0,PASS
+T05,Robbery,309,"351, 309",,,1,1,0,FAIL
+T06,Assault,130,130,,"131, 136",1,0,0,PASS
+T07,Voluntarily causing hurt,115,115,,,1,0,0,PASS
+T08,Assault + theft,"134, 303","134, 304",,,1,1,1,FAIL
+T09,Force used specifically to facilitate theft,"134, 304",134,309,,1,0,1,FAIL
+T10,Ambiguous force + theft,303,303,"134, 309","303, 309",1,0,0,PASS
+T11,Rash driving on public road,281,281,,,1,0,0,PASS
+T12,Road accident causing hurt,"281, 125","281, 115",,,1,1,1,FAIL
+T13,Road accident with death,"281, 106","281, 106",,,2,0,0,PASS
+T14,Wrongful restraint,126,,,,0,0,1,FAIL
+T15,Wrongful confinement,127,127,,,1,0,0,PASS
+T16,Cheating,318,,,,0,0,1,FAIL
+T17,Criminal intimidation,351,351,,,1,0,0,PASS
+T18,Criminal breach/misappropriation of property,316,316,,303,1,0,0,PASS
+T19,Theft by employee/clerk,306,306,,303,1,0,0,PASS
+T20,Theft in dwelling house,305,"305, 303","329, 331",303,1,1,0,FAIL
+T21,Organised/petty organised crime scenario,"112, 304","304, 303, 112",111,303,2,1,0,FAIL
+T22,False information to public servant,217,217,,,1,0,0,PASS
+T23,A sexual-offence-related case,78,78,,,1,0,0,PASS
+T24,A property-mark offence,346,346,,,1,0,0,PASS
+T25,A case involving grave/sudden provocation,136,"115, 136",,,1,1,0,FAIL
+T26,A case where important statutory facts are missing,,,,,0,0,0,PASS
+T27,A case designed to trigger a likely retrieval false positive,281,281,,,1,0,0,PASS
+T28,Another ambiguous case,314,314,303,303,1,0,0,PASS
+T29,A multi-offence incident,"305, 115, 331","134, 115, 331, 305",,,3,1,0,FAIL
+T30,A completely unrelated/non-criminal incident,,,,,0,0,0,PASS
