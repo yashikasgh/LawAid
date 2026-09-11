@@ -28,11 +28,27 @@ class TestPipeline(unittest.TestCase):
             "The accused Rahul entered the shop and took a mobile phone belonging to Vijay (PAN: ABCDE1234F, Aadhaar: 2345 6789 0123) "
             "without permission. Call 9876543210 or email test@example.com."
         )
+        self.mock_query_response = json.dumps({
+            "queries": [
+                {
+                    "query_type": "fact_focused",
+                    "query": "taking mobile phone without consent"
+                },
+                {
+                    "query_type": "incident_context",
+                    "query": "Rahul entered shop and took mobile phone"
+                },
+                {
+                    "query_type": "legal_concept",
+                    "query": "dishonest taking of movable property"
+                }
+            ]
+        })
         self.mock_llm_response = json.dumps({
             "status": "success",
             "analysis": [
                 {
-                    "document_id": "bns_303_303(2)-2",
+                    "document_id": "bns_314",
                     "applicability": "supported",
                     "reasoning": "The accused took a mobile phone belonging to Vijay without consent."
                 }
@@ -42,7 +58,7 @@ class TestPipeline(unittest.TestCase):
 
     def test_1_privacy_happens_before_llm_call(self):
         """1. Verify privacy sanitization occurs before any LLM prompt generation."""
-        mock_llm = MockLLMClient(responses=[self.mock_llm_response, self.mock_llm_response])
+        mock_llm = MockLLMClient(responses=[self.mock_query_response, self.mock_llm_response])
 
         result = run_pipeline(self.sample_raw_incident, llm_client=mock_llm)
 
@@ -62,7 +78,7 @@ class TestPipeline(unittest.TestCase):
 
     def test_2_end_to_end_successful_flow_with_mock_llm(self):
         """2. Verify successful end-to-end flow returning structured result."""
-        mock_llm = MockLLMClient(responses=[self.mock_llm_response, self.mock_llm_response])
+        mock_llm = MockLLMClient(responses=[self.mock_query_response, self.mock_llm_response])
 
         result = run_pipeline(self.sample_raw_incident, llm_client=mock_llm)
 
@@ -78,12 +94,12 @@ class TestPipeline(unittest.TestCase):
         self.assertGreater(len(result["disclaimer"].strip()), 0)
 
         item = result["analysis"][0]
-        self.assertEqual(item["section"], "303")
+        self.assertEqual(item["section"], "314")
         self.assertEqual(item["applicability"], "supported")
 
     def test_3_no_raw_pii_in_output_or_replacement_map(self):
         """3. Verify no raw PII appears in replacement_map or detections metadata."""
-        mock_llm = MockLLMClient(responses=[self.mock_llm_response, self.mock_llm_response])
+        mock_llm = MockLLMClient(responses=[self.mock_query_response, self.mock_llm_response])
 
         result = run_pipeline(self.sample_raw_incident, llm_client=mock_llm)
 
@@ -115,7 +131,7 @@ class TestPipeline(unittest.TestCase):
 
     def test_5_llm_client_resolution_at_pipeline_boundary(self):
         """5. Verify llm_client resolution behavior when None vs explicitly injected."""
-        mock_llm = MockLLMClient(responses=[self.mock_llm_response])
+        mock_llm = MockLLMClient(responses=[self.mock_query_response, self.mock_llm_response])
 
         # When injected explicitly, uses the injected client
         res = run_pipeline(self.sample_raw_incident, llm_client=mock_llm)

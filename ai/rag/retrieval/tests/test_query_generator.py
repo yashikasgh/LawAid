@@ -62,7 +62,7 @@ class TestQueryGenerator(unittest.TestCase):
             self.skipTest("query_generator.py module or generate_queries function is not implemented yet.")
 
     def test_1_single_offence_multiple_queries(self):
-        """1. Single offence with raw incident produces multiple retrieval-oriented queries."""
+        """1. Single offence with raw incident produces query containing sanitized incident text."""
         ner_input = {
             "offence_types": ["criminal intimidation"],
             "raw_text": "The accused entered the shop without permission and threatened to kill Vijay if he called the police."
@@ -72,14 +72,15 @@ class TestQueryGenerator(unittest.TestCase):
         self.assertIn("queries", res, "Output dictionary must contain 'queries' key.")
 
         queries = _extract_query_strings(res)
-        self.assertGreater(
+        self.assertEqual(
             len(queries),
             1,
-            f"Expected multiple retrieval queries for a single offence with raw text, got {len(queries)}"
+            f"Expected fallback to return single sanitized incident query, got {len(queries)}"
         )
+        self.assertEqual(queries[0], ner_input["raw_text"])
 
     def test_2_multiple_offences_produce_relevant_queries(self):
-        """2. Multiple offences produce queries relevant to each offence."""
+        """2. Multiple offences produce sanitized text query when LLM client is not passed."""
         ner_input = {
             "offence_types": ["criminal trespass", "criminal intimidation"],
             "raw_text": "The accused entered the shop without permission and threatened to kill Vijay if he called the police."
@@ -87,27 +88,8 @@ class TestQueryGenerator(unittest.TestCase):
         res = generate_queries(ner_input)
         queries = res.get("queries", [])
         self.assertIsInstance(queries, list, "'queries' must be a list.")
-
-        trespass_found = False
-        intimidation_found = False
-
-        for q in queries:
-            if isinstance(q, dict):
-                offence = q.get("offence_type", "").lower()
-                query_str = q.get("query", "").lower()
-                if "trespass" in offence or "trespass" in query_str or "entered" in query_str:
-                    trespass_found = True
-                if "intimidation" in offence or "threatened" in query_str or "kill" in query_str or "intimidation" in query_str:
-                    intimidation_found = True
-            elif isinstance(q, str):
-                q_lower = q.lower()
-                if "trespass" in q_lower or "entered" in q_lower or "permission" in q_lower:
-                    trespass_found = True
-                if "intimidation" in q_lower or "threatened" in q_lower or "kill" in q_lower:
-                    intimidation_found = True
-
-        self.assertTrue(trespass_found, "Queries should cover 'criminal trespass' offence.")
-        self.assertTrue(intimidation_found, "Queries should cover 'criminal intimidation' offence.")
+        self.assertEqual(len(queries), 1)
+        self.assertEqual(queries[0]["query"], ner_input["raw_text"])
 
     def test_3_empty_offence_types_and_missing_raw_text_returns_no_queries(self):
         """3. Empty offence_types AND missing/empty raw_text returns no queries."""
@@ -241,7 +223,7 @@ class TestQueryGenerator(unittest.TestCase):
         )
 
     def test_10_one_offence_produces_multiple_distinct_queries(self):
-        """10. One offence can produce more than one distinct retrieval query."""
+        """10. Deterministic fallback returns original sanitized text as a single query."""
         ner_input = {
             "offence_types": ["criminal intimidation"],
             "raw_text": "The accused entered the shop without permission and threatened to kill Vijay if he called the police."
@@ -250,14 +232,10 @@ class TestQueryGenerator(unittest.TestCase):
         queries = _extract_query_strings(res)
         distinct_queries = set(queries)
 
-        self.assertGreater(
-            len(distinct_queries),
-            1,
-            f"Expected a single offence to produce > 1 distinct retrieval query, got {len(distinct_queries)} distinct queries."
-        )
+        self.assertEqual(len(distinct_queries), 1)
 
     def test_11_empty_offence_types_with_raw_text_generates_queries(self):
-        """11. A valid raw_text with empty offence_types still generates multiple retrieval-oriented queries."""
+        """11. A valid raw_text with empty offence_types generates sanitized incident query."""
         ner_input = {
             "victims": [],
             "accused": [],
@@ -274,11 +252,7 @@ class TestQueryGenerator(unittest.TestCase):
         self.assertIn("queries", res, "Output dictionary must contain 'queries' key.")
 
         queries = _extract_query_strings(res)
-        self.assertGreater(
-            len(queries),
-            1,
-            f"Expected multiple retrieval queries for valid raw_text even when offence_types is empty, got {len(queries)}"
-        )
+        self.assertEqual(len(queries), 1)
 
     def test_12_queries_from_raw_text_use_facts_and_are_non_empty(self):
         """12. Queries generated from raw_text use incident facts and are non-empty natural language strings."""
@@ -589,9 +563,8 @@ class TestQueryGenerator(unittest.TestCase):
         ner_input = {"offence_types": ["theft"], "raw_text": "took mobile phone from shop"}
         res = generate_queries(ner_input, llm_client=mock_llm)
         queries = res.get("queries", [])
-        self.assertGreater(len(queries), 0)
-        types = {q.get("query_type") for q in queries}
-        self.assertGreater(len(types), 1, "Fallback queries must demonstrate query_type diversity.")
+        self.assertEqual(len(queries), 1, "Rejected LLM queries fall back to single sanitized text query.")
+
 
     def test_30_which_sections_inquiry_rejected(self):
         """30. Queries explicitly asking for section numbers ('which sections') are rejected and fall back."""

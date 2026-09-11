@@ -12,7 +12,7 @@ import spacy
 CONTROLLED_OFFENCES = {
     "assault": [
         "assault", "assaulted", "assaulting", "physical assault", "physically attacked",
-        "physically assault", "hit", "punched", "beat", "beaten", "struck", "slapped", "battered"
+        "physically assault", "punched", "beat", "beaten", "slapped", "battered"
     ],
     "theft": [
         "theft", "stole", "stolen", "thief", "snatched", "snatching", "robbed", "robbery",

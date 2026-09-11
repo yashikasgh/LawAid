@@ -28,7 +28,15 @@ export default function CitizenChatPage() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [sessionId, setSessionId] = useState('')
+  const [isListening, setIsListening] = useState(false)
+  const [speechSupported, setSpeechSupported] = useState(false)
+  const [speechNotice, setSpeechNotice] = useState('')
+
   const chatEndRef = useRef<HTMLDivElement>(null)
+  const recognitionRef = useRef<any>(null)
+
+  const baseTextRef = useRef<string>('')
+  const hasCapturedSpeechRef = useRef<boolean>(false)
 
   useEffect(() => {
     // Generate or restore session ID
@@ -38,15 +46,141 @@ export default function CitizenChatPage() {
       sessionStorage.setItem('lawaid_chat_session', sid)
     }
     setSessionId(sid)
+
+    // Check Speech Recognition browser support
+    if (typeof window !== 'undefined') {
+      const SpeechRecognition =
+        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+      if (SpeechRecognition) {
+        setSpeechSupported(true)
+      }
+    }
   }, [])
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  function handleToggleSpeech() {
+    if (typeof window === 'undefined') return
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+
+    if (!SpeechRecognition) {
+      setSpeechNotice('Voice input is not supported in this browser.')
+      setTimeout(() => setSpeechNotice(''), 4000)
+      return
+    }
+
+    if (isListening) {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop()
+        } catch {
+          // ignore error if already stopped
+        }
+      }
+      setIsListening(false)
+      return
+    }
+
+    // Save existing typed text as base and reset captured speech flag before starting recognition
+    baseTextRef.current = input.trim()
+    hasCapturedSpeechRef.current = false
+
+    try {
+      const recognition = new SpeechRecognition()
+      recognition.continuous = true
+      recognition.interimResults = true
+      recognition.lang = 'en-IN'
+
+      recognition.onstart = () => {
+        setIsListening(true)
+        setSpeechNotice('')
+      }
+
+      recognition.onresult = (event: any) => {
+        let finalTranscript = ''
+        let interimTranscript = ''
+
+        for (let i = 0; i < event.results.length; i++) {
+          const result = event.results[i]
+          const text = result[0].transcript
+          if (result.isFinal) {
+            finalTranscript += text + ' '
+          } else {
+            interimTranscript += text
+          }
+        }
+
+        const base = baseTextRef.current
+        const finalPart = finalTranscript.trim()
+        const interimPart = interimTranscript.trim()
+
+        if (finalPart || interimPart) {
+          hasCapturedSpeechRef.current = true
+        }
+
+        let combined = base
+        if (finalPart) {
+          combined = combined ? `${combined} ${finalPart}` : finalPart
+        }
+        if (interimPart) {
+          combined = combined ? `${combined} ${interimPart}` : interimPart
+        }
+
+        setInput(combined)
+      }
+
+      recognition.onerror = (event: any) => {
+        console.warn('Speech recognition error event:', event.error)
+        setIsListening(false)
+
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          setSpeechNotice('Microphone permission was denied. Please allow microphone access in your browser.')
+          setTimeout(() => setSpeechNotice(''), 5000)
+        } else if (event.error === 'no-speech' || event.error === 'aborted') {
+          // Normal timeout or manual stop - silently finish without error banner
+        } else if (event.error === 'network') {
+          // If speech was successfully captured, network stream closing is normal - suppress misleading error notice!
+          if (!hasCapturedSpeechRef.current) {
+            setSpeechNotice('Speech recognition network service unavailable.')
+            setTimeout(() => setSpeechNotice(''), 4000)
+          }
+        } else {
+          // Only show notice for other errors if no speech was captured
+          if (!hasCapturedSpeechRef.current) {
+            setSpeechNotice(`Speech recognition notice: ${event.error || 'Stopped.'}`)
+            setTimeout(() => setSpeechNotice(''), 4000)
+          }
+        }
+      }
+
+      recognition.onend = () => {
+        setIsListening(false)
+      }
+
+      recognitionRef.current = recognition
+      recognition.start()
+    } catch (err) {
+      console.error('Failed to start speech recognition:', err)
+      setIsListening(false)
+      setSpeechNotice('Failed to start voice input.')
+      setTimeout(() => setSpeechNotice(''), 4000)
+    }
+  }
+
   async function handleSend(textToSend?: string) {
     const query = (textToSend || input).trim()
     if (!query || loading) return
+
+    // Stop active speech recognition if user clicks send while recording
+    if (isListening && recognitionRef.current) {
+      try {
+        recognitionRef.current.stop()
+      } catch {}
+      setIsListening(false)
+    }
 
     setInput('')
     setMessages(prev => [...prev, { role: 'user', content: query }])
@@ -88,7 +222,7 @@ export default function CitizenChatPage() {
               <button
                 key={idx}
                 onClick={() => handleSend(q)}
-                className="text-xs bg-white border border-gray-200 hover:border-lawblue hover:bg-lblue text-gray-700 px-3 py-1.5 rounded-full whitespace-nowrap transition shrink-0 shadow-sm"
+                className="text-xs bg-white border border-gray-200 hover:border-lawblue hover:bg-lblue text-gray-700 px-3 py-1.5 rounded-full whitespace-nowrap transition shrink-0 shadow-sm focus:outline-none focus:ring-2 focus:ring-lawblue"
               >
                 💡 {q}
               </button>
@@ -137,21 +271,68 @@ export default function CitizenChatPage() {
             <div ref={chatEndRef} />
           </div>
 
+          {/* Speech notice notification banner if present */}
+          {speechNotice && (
+            <div className="text-xs text-amber-800 bg-amber-50 px-3 py-2 rounded-xl border border-amber-200 mb-2 flex items-center justify-between shadow-sm">
+              <span>⚠️ {speechNotice}</span>
+              <button
+                onClick={() => setSpeechNotice('')}
+                className="text-amber-600 hover:text-amber-900 font-bold text-xs px-1"
+                title="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {/* Chat input box */}
-          <div className="bg-white rounded-2xl p-2 shadow-sm border border-gray-200 flex gap-2">
+          <div className="bg-white rounded-2xl p-2 shadow-sm border border-gray-200 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleToggleSpeech}
+              disabled={loading}
+              aria-label={isListening ? 'Stop voice input' : 'Start voice input'}
+              title={
+                !speechSupported
+                  ? 'Voice input is not supported in this browser'
+                  : isListening
+                  ? 'Click to stop listening'
+                  : 'Click to speak your legal question'
+              }
+              className={`p-2 sm:px-3 sm:py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 focus:outline-none focus:ring-2 focus:ring-lawblue ${
+                isListening
+                  ? 'bg-rose-500 text-white animate-pulse shadow-md shadow-rose-200'
+                  : speechSupported
+                  ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  : 'bg-gray-100 text-gray-400 cursor-not-allowed opacity-60'
+              }`}
+            >
+              <span className="text-sm">{isListening ? '🛑' : '🎙️'}</span>
+              <span className="hidden sm:inline">
+                {isListening ? 'Listening...' : 'Voice'}
+              </span>
+            </button>
+
             <input
               type="text"
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSend()}
-              placeholder="Ask a legal question or describe a situation (e.g. 'Is bail available for Section 318?')..."
-              className="flex-1 px-4 py-2 text-xs outline-none text-gray-800"
+              placeholder={
+                isListening
+                  ? 'Listening to your speech... Speak now or edit below.'
+                  : "Ask a legal question or describe a situation (e.g. 'Is bail available for Section 318?')..."
+              }
+              className={`flex-1 px-3 py-2 text-xs outline-none text-gray-800 rounded-lg transition-colors ${
+                isListening ? 'bg-rose-50/50 placeholder-rose-400' : ''
+              }`}
               disabled={loading}
             />
+
             <button
               onClick={() => handleSend()}
               disabled={loading || !input.trim()}
-              className="bg-lawblue text-white px-5 py-2 rounded-xl text-xs font-bold hover:bg-navy transition disabled:opacity-50"
+              className="bg-lawblue text-white px-4 sm:px-5 py-2 rounded-xl text-xs font-bold hover:bg-navy transition disabled:opacity-50 shrink-0 focus:outline-none focus:ring-2 focus:ring-lawblue"
             >
               Send →
             </button>

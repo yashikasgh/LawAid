@@ -117,21 +117,27 @@ def construct_query_generator_prompt(ner_result: Dict[str, Any]) -> str:
 
     prompt = (
         "You are a specialized retrieval-query generation assistant for Indian criminal law (BNS/BNSS).\n"
-        "Generate 3 to 5 diverse natural-language search queries that help retrieve relevant provisions "
+        "Generate 2 to 5 adaptive, diverse natural-language search queries that help retrieve relevant provisions "
         "from the BNS/BNSS legal corpus for the incident.\n\n"
+        "ADAPTIVE QUERY COUNT RULES:\n"
+        "1. For simple incidents with a single clear event, generate 2 to 3 complementary queries.\n"
+        "2. For complex or multi-offence incidents containing distinct conduct segments (e.g., forced entry, physical assault, property theft), generate 3 to 5 complementary queries covering each distinct action segment and statutory element.\n"
+        "3. Never generate redundant or duplicate queries merely to reach a higher count.\n\n"
         "STRICT GROUNDING & RETRIEVAL RULES:\n"
         "1. Every generated query MUST remain grounded in the incident's explicit facts or legal concepts directly supported by those facts.\n"
         "2. Do NOT include generic jurisdictional filler or meta-language such as 'under Indian criminal law', 'in Indian law', 'under BNS', 'under BNSS', 'in India', 'legal provisions relating to', or similar phrases that do not improve retrieval.\n"
-        "3. For legal_concept queries, express a specific legal concept directly supported by the incident facts (e.g. 'dishonest taking of movable property without consent'), rather than generic phrases like 'legal provisions relating to...' or 'possession under law'.\n"
-        "4. If offence_types are supplied, they may be used as retrieval concepts, but do not assume that they are legally correct.\n"
-        "5. If offence_types are missing, generate factual queries from the incident without inventing an offence.\n"
+        "3. Do NOT generate section numbers (e.g. §125, §281, §303), state that any provision applies, or hardcode section maps.\n"
+        "4. Do NOT invent facts or events not present in the incident (e.g. do not invent 'failure to render assistance' or 'ransom' unless explicitly stated in the text).\n"
+        "5. If offence_types are supplied, they may be used as retrieval concepts, but do not assume that they are legally correct.\n"
         "6. Do not upgrade, relabel, or introduce a more serious or legally distinct offence characterization "
-        "(such as 'robbery', 'dacoity', 'extortion', 'kidnapping') that is not present in the supplied offence_types or incident facts.\n"
-        "7. Do not generate section numbers, state that any provision applies, or invent facts not present in the incident.\n\n"
-        "Prefer queries that express:\n"
-        "- the original incident context\n"
-        "- important factual actions/circumstances\n"
-        "- relevant legal concepts expressed in natural language\n\n"
+        "(such as 'robbery', 'dacoity', 'extortion', 'kidnapping') that is not present in the supplied offence_types or incident facts.\n\n"
+        "DYNAMIC MULTIPLE SEMANTIC PERSPECTIVES:\n"
+        "Generate queries from complementary angles dynamically derived from the incident facts:\n"
+        "1. FACTUAL CIRCUMSTANCES (query_type: 'fact_focused'): Factual details, objects, and circumstances.\n"
+        "2. CONDUCT / PHYSICAL ACTION (query_type: 'action_context'): Specific physical conduct and acts.\n"
+        "3. STATUTORY LEGAL CONCEPT (query_type: 'legal_concept'): Generic statutory legal elements represented by the facts (e.g., 'dishonest taking of movable property without consent', 'theft committed by sudden quick or forcible seizure of property', or 'fraudulent inducement to deliver property or money').\n"
+        "4. CONSEQUENCE / HARM (query_type: 'legal_concept' or 'action_context'): Injury, bodily hurt, or safety endangerment when relevant.\n"
+        "5. MULTI-OFFENCE CONDUCT SEGMENTS (query_type: 'action_context' or 'fact_focused'): For incidents with multiple distinct conduct segments, generate focused queries for each segment.\n\n"
         "Return ONLY JSON matching this format:\n"
         "{\n"
         '  "queries": [\n'
@@ -291,6 +297,15 @@ def validate_llm_queries(
         r"\bforgery\b",
         r"\bmischief\b",
         r"\bassault\b",
+        r"\bsnatching\b",
+        r"\bseiz(ing|ure)\b",
+        r"\bforcibl(y|e)\b",
+        r"\bendangering\s+(human\s+)?life\b",
+        r"\bendangering\s+personal\s+safety\b",
+        r"\bpersonal\s+safety\b",
+        r"\brash\s+or\s+negligent\b",
+        r"\bcausing\s+hurt\b",
+        r"\bcausing\s+injury\b",
     ]
     grounded_legal_regex = re.compile(
         "|".join(grounded_legal_concept_patterns), re.IGNORECASE
@@ -306,17 +321,17 @@ def validate_llm_queries(
         q_type = item.get("query_type")
         q_str = item.get("query")
 
-        # 4. query is a non-empty string
+        # query is a non-empty string
         if not isinstance(q_str, str) or not q_str.strip():
             return None
 
         q_clean = q_str.strip()
 
-        # 5. query_type is one of the allowed values
+        # query_type is one of the allowed values
         if not isinstance(q_type, str) or q_type.strip() not in allowed_query_types:
             return None
 
-        # 9. Reject queries containing section numbers/BNS references
+        # Reject queries containing section numbers/BNS references
         if section_regex.search(q_clean):
             return None
 
@@ -324,7 +339,7 @@ def validate_llm_queries(
         if inquiry_regex.search(q_clean):
             return None
 
-        # 10. Reject queries making explicit applicability conclusions
+        # Reject queries making explicit applicability conclusions
         if conclusion_regex.search(q_clean):
             return None
 
@@ -337,24 +352,11 @@ def validate_llm_queries(
             if concept in q_clean.lower() and concept not in ner_str_lower:
                 return None
 
-        # 11. Fact check: proper nouns in query must exist in ner_result or incident
+        # Fact check: proper nouns in query must exist in ner_result or incident
         words = re.findall(r"\b[A-Z][a-z]+\b", q_clean)
         common_legal = {
-            "The",
-            "A",
-            "An",
-            "In",
-            "On",
-            "At",
-            "For",
-            "With",
-            "Under",
-            "Indian",
-            "Law",
-            "Legal",
-            "State",
-            "Penal",
-            "Code",
+            "The", "A", "An", "In", "On", "At", "For", "With", "Under",
+            "Indian", "Law", "Legal", "State", "Penal", "Code",
         }
         for w in words:
             if w in common_legal:
@@ -362,7 +364,7 @@ def validate_llm_queries(
             if w.lower() not in ner_str_lower:
                 return None
 
-        # 12. Anchoring check: query must contain either concrete incident facts/actions/objects OR a specific grounded legal concept
+        # Anchoring check: query must contain either concrete incident facts/actions/objects OR a specific grounded legal concept
         q_lower = q_clean.lower()
         q_tokens = set(re.findall(r"\b[a-z]{3,}\b", q_lower)) - stop_words
 
@@ -372,12 +374,11 @@ def validate_llm_queries(
         if not has_fact_match and not has_legal_concept_match:
             return None
 
-        # 8. Deduplicate queries case-insensitively while preserving order
+        # Deduplicate queries case-insensitively while preserving order
         normalized = q_clean.lower()
         if normalized not in seen_queries:
             seen_queries.add(normalized)
 
-            # Map offence_type from NER if relevant, else ""
             matched_offence = ""
             if offence_types:
                 for o in offence_types:
@@ -399,16 +400,16 @@ def validate_llm_queries(
                 }
             )
 
-    # 6. Maximum 5 queries
+    # Maximum 5 queries
     if len(valid_queries) > 5:
         valid_queries = valid_queries[:5]
 
-    # 7. Minimum useful number should be 3 when generation succeeds
-    if len(valid_queries) < 3:
+    # Adaptive minimum check: allow 2 to 5 queries
+    if len(valid_queries) < 2:
         return None
 
-    # Check query_type diversity: reject output where all queries have the exact same query_type when 3+ queries exist
-    if len(valid_queries) >= 3:
+    # Check query_type diversity: reject output where all queries have the exact same query_type when 2+ queries exist
+    if len(valid_queries) >= 2:
         unique_types = {q["query_type"] for q in valid_queries}
         if len(unique_types) == 1:
             return None
@@ -419,109 +420,25 @@ def validate_llm_queries(
 def _generate_deterministic_queries(
     ner_result: Dict[str, Any]
 ) -> Dict[str, List[Dict[str, str]]]:
-    """Fallback deterministic query generator operating purely on Python logic."""
+    """Fallback query generator returning only the original sanitized incident description as a single query."""
     if not isinstance(ner_result, dict):
         return {"queries": []}
 
-    offence_types_raw = ner_result.get("offence_types")
-    offence_types: List[str] = []
-    if isinstance(offence_types_raw, list):
-        for item in offence_types_raw:
-            if isinstance(item, str) and item.strip():
-                offence_types.append(item.strip())
-
     raw_text = ner_result.get("raw_text")
-    if not isinstance(raw_text, str):
-        raw_text = ""
-    raw_text_clean = raw_text.strip()
-
-    if not offence_types and not raw_text_clean:
+    if not isinstance(raw_text, str) or not raw_text.strip():
         return {"queries": []}
 
-    entity_terms: List[str] = []
-    for key in ("victims", "accused", "persons", "locations", "organizations"):
-        val_list = ner_result.get(key)
-        if isinstance(val_list, list):
-            for item in val_list:
-                if isinstance(item, str) and item.strip():
-                    entity_terms.append(item.strip())
-
-    result_queries: List[Dict[str, str]] = []
-    seen_queries = set()
-
-    if offence_types:
-        for offence_str in offence_types:
-            if raw_text_clean:
-                query_incident = f"{offence_str} {raw_text_clean}".strip()
-            else:
-                query_incident = f"incident details regarding {offence_str}".strip()
-
-            query_offence = (
-                f"legal definition elements and punishment for {offence_str}".strip()
-            )
-
-            if raw_text_clean:
-                if entity_terms:
-                    entities_str = " ".join(entity_terms[:4])
-                    query_facts = (
-                        f"{offence_str} incident facts involving {entities_str}".strip()
-                    )
-                else:
-                    query_facts = (
-                        f"{offence_str} specific incident facts and circumstances".strip()
-                    )
-            else:
-                query_facts = (
-                    f"{offence_str} legal provisions and statutory definitions".strip()
-                )
-
-            candidates = [
-                ("incident_context", query_incident),
-                ("offence_context", query_offence),
-                ("fact_focused", query_facts),
-            ]
-
-            for q_type, q_str in candidates:
-                normalized = q_str.lower()
-                if normalized not in seen_queries:
-                    seen_queries.add(normalized)
-                    result_queries.append(
-                        {
-                            "offence_type": offence_str,
-                            "query_type": q_type,
-                            "query": q_str,
-                        }
-                    )
-    else:
-        query_incident = raw_text_clean
-
-        if entity_terms:
-            entities_str = " ".join(entity_terms[:4])
-            query_facts = (
-                f"incident facts involving {entities_str} {raw_text_clean}".strip()
-            )
-        else:
-            query_facts = (
-                f"incident facts and circumstances {raw_text_clean}".strip()
-            )
-
-        query_action = f"factual allegations {raw_text_clean}".strip()
-
-        candidates = [
-            ("incident_context", query_incident),
-            ("fact_focused", query_facts),
-            ("action_context", query_action),
+    clean_text = raw_text.strip()
+    return {
+        "queries": [
+            {
+                "offence_type": "",
+                "query_type": "incident_context",
+                "query": clean_text
+            }
         ]
+    }
 
-        for q_type, q_str in candidates:
-            normalized = q_str.lower()
-            if normalized not in seen_queries:
-                seen_queries.add(normalized)
-                result_queries.append(
-                    {"offence_type": "", "query_type": q_type, "query": q_str}
-                )
-
-    return {"queries": result_queries}
 
 
 def generate_queries(
