@@ -2,7 +2,6 @@
 
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
-import { policeAPI } from '@/lib/api'
 
 type FormData = {
   district: string
@@ -63,8 +62,6 @@ type FormData = {
 
 export default function FIRPreviewPage() {
   const [form, setForm] = useState<FormData | null>(null)
-  const [approvedInfo, setApprovedInfo] = useState<{ fir_id: string; sha256_hash: string; approved_at: string } | null>(null)
-  const [approving, setApproving] = useState(false)
 
   useEffect(() => {
     const saved = sessionStorage.getItem('lawaid_fir_draft')
@@ -77,19 +74,6 @@ export default function FIRPreviewPage() {
       }
     }
   }, [])
-
-  async function handleOfficialApprove() {
-    if (!form) return
-    setApproving(true)
-    try {
-      const res = await policeAPI.approveFir(form.firNo || 'FIR/2026/DRAFT')
-      setApprovedInfo(res.data)
-    } catch {
-      alert('Could not connect to police server. Please ensure backend is running.')
-    } finally {
-      setApproving(false)
-    }
-  }
 
   if (!form) {
     return (
@@ -126,40 +110,14 @@ export default function FIRPreviewPage() {
           ← Edit Draft
         </Link>
 
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={handleOfficialApprove}
-            disabled={approving || !!approvedInfo}
-            className="bg-green-700 hover:bg-green-800 text-white px-5 py-2.5 rounded-lg font-semibold transition disabled:opacity-60"
-          >
-            {approving ? 'Securing & Registering...' : approvedInfo ? '✓ Official FIR Registered' : '🛡 Approve & Register Official FIR'}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="bg-navy text-white px-5 py-2.5 rounded-lg font-semibold"
-          >
-            🖨 Print / Save as PDF
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => window.print()}
+          className="bg-navy text-white px-5 py-2.5 rounded-lg font-semibold"
+        >
+          🖨 Print / Save as PDF
+        </button>
       </div>
-
-      {approvedInfo && (
-        <div className="print:hidden max-w-5xl mx-auto mb-6 bg-green-50 border-2 border-green-500 rounded-xl p-4 shadow-sm text-green-900">
-          <div className="flex items-center gap-2 font-bold text-base mb-1">
-            <span>🛡</span> OFFICIAL POLICE REGISTRY RECORD CREATED
-          </div>
-          <p className="text-xs">
-            <strong>FIR ID:</strong> {approvedInfo.fir_id} | <strong>Tamper-Proof SHA-256 Hash:</strong>{' '}
-            <code className="bg-green-100 px-1 py-0.5 rounded font-mono text-[11px]">{approvedInfo.sha256_hash}</code>
-          </p>
-          <p className="text-[11px] text-green-700 mt-1">
-            Timestamped on {new Date(approvedInfo.approved_at).toLocaleString()} • Logged in Station Registry under Section 173 BNSS.
-          </p>
-        </div>
-      )}
 
       {/* FIR document */}
       <article className="fir-document max-w-5xl mx-auto bg-white shadow-xl">

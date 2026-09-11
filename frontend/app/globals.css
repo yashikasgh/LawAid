@@ -23,3 +23,10 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans);
 }
+.form-section {
+  background: white;
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
