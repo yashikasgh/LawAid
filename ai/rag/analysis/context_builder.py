@@ -141,8 +141,8 @@ def build_legal_context(ner_result: Dict[str, Any], retrieval_result: Dict[str, 
                 "clause": clause_str,
                 "title": doc.get("title", ""),
                 "distance": doc.get("distance"),
-                "target_clause_text": clause_parts["target_clause_text"],
-                "section_definition": clause_parts["section_definition"],
+                "target_clause_text": clause_parts["target_clause_text"] or doc.get("target_clause_text", raw_doc_text),
+                "section_definition": clause_parts["section_definition"] or doc.get("section_definition", ""),
                 "schedule_1": schedule_1,
                 "text": raw_doc_text
             }

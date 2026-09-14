@@ -25,7 +25,8 @@ from ai.rag.ner.ner_extractor import extract_entities
 from ai.rag.retrieval.query_generator import generate_queries
 from ai.rag.retrieval.retrieve_bns import retrieve
 from ai.rag.retrieval.reranker import rerank_candidates
-from ai.rag.analysis.legal_analyzer import analyze_incident, GroqLLMClient, MultiProviderLLMFailoverClient, LLMClient
+from ai.rag.analysis.legal_analyzer import analyze_incident, GroqLLMClient, MultiProviderLLMFailoverClient, LLMClient, Workload
+from ai.rag.analysis.context_builder import _extract_clause_parts, _parse_schedule_1
 
 
 LEGAL_DISCLAIMER = (
@@ -38,7 +39,8 @@ def run_pipeline(
     raw_incident: str,
     llm_client: Optional[LLMClient] = None,
     top_k_retrieval: int = 20,
-    top_k_rerank: int = 15
+    top_k_rerank: int = 15,
+    analysis_candidate_limit: int = 7
 ) -> Dict[str, Any]:
     """
     Executes the end-to-end LawAid RAG Legal Analysis Pipeline.
@@ -49,7 +51,8 @@ def run_pipeline(
         → NER (entity extraction on sanitized text)
         → Query Generator (retrieval query formulation)
         → ChromaDB Vector Retrieval (Top-20 per query)
-        → Reranker (deterministic RRF reranking to Top-15)
+        → Reranker (deterministic RRF reranking to Top-15 candidate pool)
+        → Analysis Context Window (Top-7 candidates passed to LLM)
         → Context Builder & Legal Analyzer (grounded analysis via LLM)
         → Final Structured Result
 
@@ -57,8 +60,9 @@ def run_pipeline(
         raw_incident (str): Original input incident description text.
         llm_client (LLMClient, optional): Swappable LLM generation backend instance.
             If None, resolves to GroqLLMClient() once at the pipeline boundary.
-        top_k_retrieval (int): Number of candidates to retrieve per query from ChromaDB.
-        top_k_rerank (int): Number of top reranked candidates to pass to Context Builder/Analyzer (default 15).
+        top_k_retrieval (int): Number of candidates to retrieve per query from ChromaDB (default 20).
+        top_k_rerank (int): Number of top reranked candidates in candidate pool (default 15).
+        analysis_candidate_limit (int): Maximum candidates passed to LLM analysis context (default 7).
 
     Returns:
         dict: Structured analysis result containing:
@@ -68,6 +72,7 @@ def run_pipeline(
             - analysis (grounded legal analysis list)
             - limitations
             - disclaimer (non-binding legal advisory statement)
+            - reranked_candidates (full RRF reranked candidate pool)
     """
     # 1. Resolve LLM client ONCE at the pipeline boundary
     if llm_client is None:
@@ -102,21 +107,46 @@ def run_pipeline(
         except Exception:
             continue
 
-    # 6. Reranking (Top-15 via RRF)
-    reranked_top_15 = rerank_candidates(
+    # 6. Full RRF Reranking across candidate pool (Top-15)
+    reranked_candidates = rerank_candidates(
         incident_input=ner_result,
         candidates=all_retrieved_candidates,
         top_k=top_k_rerank
     )
 
-    # 7. Legal Analysis (Internal context building & evidence grounding)
+    # Enrich reranked_candidates with clause text and Schedule 1 metadata for clean fallback presentation
+    for cand in reranked_candidates:
+        raw_doc_text = cand.get("text", "")
+        clause_str = cand.get("clause", "") or ""
+        clause_parts = _extract_clause_parts(raw_doc_text, clause_str)
+        schedule_1_raw = cand.get("schedule_1") or _parse_schedule_1(raw_doc_text)
+
+        cand["target_clause_text"] = clause_parts["target_clause_text"] or cand.get("target_clause_text") or raw_doc_text
+        cand["section_definition"] = clause_parts["section_definition"] or cand.get("section_definition", "")
+        if isinstance(schedule_1_raw, dict) and schedule_1_raw:
+            cand["schedule_1"] = {
+                "offence": schedule_1_raw.get("offence", ""),
+                "punishment": schedule_1_raw.get("punishment", ""),
+                "cognizable": schedule_1_raw.get("cognizable", ""),
+                "bailable": schedule_1_raw.get("bailable", ""),
+                "court": schedule_1_raw.get("court", "") or schedule_1_raw.get("triable_by", "")
+            }
+
+    # 7. Analysis Context Limit: Select Top-7 candidates for LLM prompt
+    analysis_candidates = (
+        reranked_candidates[:analysis_candidate_limit]
+        if analysis_candidate_limit is not None and len(reranked_candidates) > analysis_candidate_limit
+        else reranked_candidates
+    )
+
+    # 8. Legal Analysis (Internal context building & evidence grounding)
     analysis_result = analyze_incident(
         ner_result=ner_result,
-        retrieval_result=reranked_top_15,
+        retrieval_result=analysis_candidates,
         llm_client=llm_client
     )
 
-    # 8. Return Final Pipeline Structure
+    # 9. Return Final Pipeline Structure
     return {
         "status": analysis_result.get("status", "success"),
         "sanitized_incident": sanitized_text,
@@ -126,7 +156,8 @@ def run_pipeline(
         },
         "analysis": analysis_result.get("analysis", []),
         "limitations": analysis_result.get("limitations", []),
-        "disclaimer": LEGAL_DISCLAIMER
+        "disclaimer": LEGAL_DISCLAIMER,
+        "reranked_candidates": reranked_candidates
     }
 
 
@@ -260,7 +291,7 @@ def run_chat_pipeline(
 
     bot_reply = ""
     try:
-        raw_llm_out = llm_client.generate(prompt)
+        raw_llm_out = llm_client.generate(prompt, workload=Workload.LEGAL_CHAT)
         if raw_llm_out:
             cleaned = raw_llm_out.strip()
             if cleaned.startswith("```json"):

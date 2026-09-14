@@ -76,7 +76,8 @@ def retrieve(query: str, top_k: int = TOP_K, db_path: str = DB_PATH, collection_
 
     for idx in range(len(ids)):
         meta = metadatas[idx] if idx < len(metadatas) else {}
-        retrieved_items.append({
+        item_dict = dict(meta) if isinstance(meta, dict) else {}
+        item_dict.update({
             "rank": idx + 1,
             "id": ids[idx],
             "section": meta.get("section", ""),
@@ -85,6 +86,9 @@ def retrieve(query: str, top_k: int = TOP_K, db_path: str = DB_PATH, collection_
             "distance": float(distances[idx]) if idx < len(distances) else 0.0,
             "text": docs[idx] if idx < len(docs) else ""
         })
+        if not item_dict.get("target_clause_text") and item_dict.get("text"):
+            item_dict["target_clause_text"] = item_dict["text"]
+        retrieved_items.append(item_dict)
 
     return retrieved_items
 

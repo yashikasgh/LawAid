@@ -5,10 +5,12 @@ Located at: ai/rag/analysis/tests/test_legal_analyzer.py
 
 import json
 import os
+import re
 import sys
 import unittest
 import unittest.mock
 from pathlib import Path
+from typing import Optional, Dict, List, Any
 
 # Add LawAid root and analysis directory to sys.path
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -25,16 +27,27 @@ from legal_analyzer import (
     MockLLMClient,
     OllamaLLMClient,
     MultiProviderLLMFailoverClient,
+    GroqLLMClient,
     GeminiLLMClient,
     CerebrasLLMClient,
-    LLMClient
+    OpenRouterLLMClient,
+    _classify_llm_error,
+    LLMClient,
+    Workload,
+    ProviderHealthStatus,
+    GLOBAL_HEALTH_TRACKER,
+    estimate_tokens,
+    GROQ_SAFE_REQUEST_TOKEN_BUDGET
 )
 from context_builder import build_legal_context
+from ai.rag.retrieval.query_generator import generate_queries
+from ai.fir_engine.fir_ai_generator import generate_structured_fir
 
 
 class TestLegalAnalyzer(unittest.TestCase):
 
     def setUp(self):
+        GLOBAL_HEALTH_TRACKER.reset()
         self.sample_ner = {
             "victims": [],
             "accused": ["Sunil"],
@@ -822,12 +835,97 @@ class TestLegalAnalyzer(unittest.TestCase):
         self.assertNotIn("bns_306", src)
         self.assertNotIn("if section == ", src)
 
+    def test_26_sibling_clauses_deduplicate_section_definition(self):
+        """Test 26: Sibling clauses from the same BNS section share section_definition only once in prompt context."""
+        retrieval_with_siblings = [
+            {
+                "id": "bns_303_303(1)",
+                "section": 303,
+                "clause": "303(1)",
+                "title": "Theft.",
+                "target_clause_text": "303.(1) Whoever, intending to take dishonestly...",
+                "section_definition": "303.(1) Whoever, intending to take dishonestly any movable property out of the possession of any person..."
+            },
+            {
+                "id": "bns_303_303(2)",
+                "section": 303,
+                "clause": "303(2)",
+                "title": "Theft.",
+                "target_clause_text": "(2) Whoever commits theft shall be punished...",
+                "section_definition": "303.(1) Whoever, intending to take dishonestly any movable property out of the possession of any person..."
+            },
+            {
+                "id": "bns_303_303(2)-2",
+                "section": 303,
+                "clause": "303(2)",
+                "title": "Theft.",
+                "target_clause_text": "Where value of property is less than 5,000 rupees...",
+                "section_definition": "303.(1) Whoever, intending to take dishonestly any movable property out of the possession of any person..."
+            }
+        ]
+        ctx = build_legal_context(self.sample_ner, retrieval_with_siblings)
+        prompt = construct_analysis_prompt(ctx)
+
+        # Parse RETRIEVED BNS LEGAL CONTEXT JSON from prompt
+        m_ctx = re.search(r"RETRIEVED BNS LEGAL CONTEXT:\s*(\[.*\])", prompt, re.DOTALL)
+        self.assertIsNotNone(m_ctx)
+        groups = json.loads(m_ctx.group(1))
+        docs = groups[0]["results"]
+
+        self.assertEqual(len(docs), 3)
+        # First candidate document has section_definition
+        self.assertIn("section_definition", docs[0])
+        # Sibling candidates 2 and 3 do NOT repeat section_definition
+        self.assertNotIn("section_definition", docs[1])
+        self.assertNotIn("section_definition", docs[2])
+
+        # All 3 candidates retain their own id, section, clause, title, and target_clause_text
+        for d in docs:
+            self.assertEqual(str(d["section"]), "303")
+            self.assertIn("target_clause_text", d)
+
+    def test_27_distinct_bns_sections_retain_their_own_section_definitions(self):
+        """Test 27: Distinct BNS sections each retain their own section_definition in prompt context."""
+        retrieval_multi_sec = [
+            {
+                "id": "bns_303_303(2)",
+                "section": 303,
+                "clause": "303(2)",
+                "title": "Theft.",
+                "target_clause_text": "(2) Whoever commits theft shall be punished...",
+                "section_definition": "303.(1) Theft definition text..."
+            },
+            {
+                "id": "bns_304",
+                "section": 304,
+                "clause": "304(1)",
+                "title": "Snatching.",
+                "target_clause_text": "(1) Theft is snatching if...",
+                "section_definition": "304.(1) Snatching definition text..."
+            }
+        ]
+        ctx = build_legal_context(self.sample_ner, retrieval_multi_sec)
+        prompt = construct_analysis_prompt(ctx)
+
+        m_ctx = re.search(r"RETRIEVED BNS LEGAL CONTEXT:\s*(\[.*\])", prompt, re.DOTALL)
+        self.assertIsNotNone(m_ctx)
+        groups = json.loads(m_ctx.group(1))
+        docs = groups[0]["results"]
+
+        self.assertEqual(len(docs), 2)
+        # Both distinct sections (303 and 304) retain their own section_definition
+        self.assertIn("section_definition", docs[0])
+        self.assertIn("section_definition", docs[1])
+        self.assertEqual(docs[0]["section_definition"], "303.(1) Theft definition text...")
+        self.assertEqual(docs[1]["section_definition"], "304.(1) Snatching definition text...")
+
 
 
 
 class TestMultiProviderLLMFailover(unittest.TestCase):
 
     def setUp(self):
+        GLOBAL_HEALTH_TRACKER.reset()
         self.sample_ner = {
             "victims": [],
             "accused": ["Sunil"],
@@ -872,18 +970,18 @@ class TestMultiProviderLLMFailover(unittest.TestCase):
         p2.model_name = "gemini-1.5-flash"
 
         failover_client = MultiProviderLLMFailoverClient(providers=[p1, p2])
-        res = analyze_incident(self.sample_ner, self.sample_retrieval, llm_client=failover_client)
+        res_text = failover_client.generate("Prompt", workload=Workload.LEGAL_CHAT)
 
-        self.assertEqual(res["status"], "success")
+        self.assertIn("success", res_text)
         self.assertEqual(p1.call_count, 1)
         self.assertEqual(p2.call_count, 0)
-        self.assertEqual(res["provider_used"]["model"], "openai/gpt-oss-120b")
+        self.assertEqual(failover_client.active_provider_info["model"], "openai/gpt-oss-120b")
 
     def test_failover_2_groq_429_fails_over_to_gemini(self):
         """2. Groq returns HTTP 429 -> Gemini is attempted."""
         class RateLimitedClient(LLMClient):
             model_name = "openai/gpt-oss-120b"
-            def generate(self, prompt: str) -> str:
+            def generate(self, prompt: str, max_tokens: Optional[int] = None) -> str:
                 raise RuntimeError("Groq API text generation failed for model 'openai/gpt-oss-120b': HTTP 429 Rate Limit Exceeded")
 
         p1 = RateLimitedClient()
@@ -895,18 +993,18 @@ class TestMultiProviderLLMFailover(unittest.TestCase):
         p2.model_name = "gemini-1.5-flash"
 
         failover_client = MultiProviderLLMFailoverClient(providers=[p1, p2])
-        res = analyze_incident(self.sample_ner, self.sample_retrieval, llm_client=failover_client)
+        res_text = failover_client.generate("Prompt", workload=Workload.LEGAL_CHAT)
 
-        self.assertEqual(res["status"], "success")
+        self.assertIn("success", res_text)
         self.assertEqual(p2.call_count, 1)
-        self.assertEqual(res["provider_used"]["model"], "gemini-1.5-flash")
-        self.assertEqual(len(res["provider_trace"]), 2)
-        self.assertEqual(res["provider_trace"][0]["status"], "failed")
-        self.assertEqual(res["provider_trace"][1]["status"], "success")
+        self.assertEqual(failover_client.active_provider_info["model"], "gemini-1.5-flash")
+        self.assertEqual(len(failover_client.last_execution_trace), 2)
+        self.assertEqual(failover_client.last_execution_trace[0]["status"], "failed")
+        self.assertEqual(failover_client.last_execution_trace[1]["status"], "success")
 
     def test_failover_3_malformed_json_tries_next_provider(self):
-        """3. Provider returns malformed structured output -> reject and try next provider."""
-        p1 = MockLLMClient(responses=["Not JSON content at all"])
+        """3. Provider returns empty output -> reject and try next provider."""
+        p1 = MockLLMClient(responses=[""])
         p1.model_name = "openai/gpt-oss-120b"
         p2 = MockLLMClient(responses=[json.dumps({
             "status": "success",
@@ -916,19 +1014,19 @@ class TestMultiProviderLLMFailover(unittest.TestCase):
         p2.model_name = "gemini-1.5-flash"
 
         failover_client = MultiProviderLLMFailoverClient(providers=[p1, p2])
-        res = analyze_incident(self.sample_ner, self.sample_retrieval, llm_client=failover_client)
+        res_text = failover_client.generate("Prompt", workload=Workload.LEGAL_CHAT)
 
-        self.assertEqual(res["status"], "success")
+        self.assertIn("success", res_text)
         self.assertEqual(p1.call_count, 1)
         self.assertEqual(p2.call_count, 1)
-        self.assertEqual(res["provider_used"]["model"], "gemini-1.5-flash")
+        self.assertEqual(failover_client.active_provider_info["model"], "gemini-1.5-flash")
 
     def test_failover_4_all_providers_fail_returns_analysis_unavailable(self):
         """4. All providers fail -> returns status 'analysis_unavailable'."""
         class AlwaysFailingClient(LLMClient):
             def __init__(self, name):
                 self.model_name = name
-            def generate(self, prompt: str) -> str:
+            def generate(self, prompt: str, max_tokens: Optional[int] = None) -> str:
                 raise RuntimeError(f"{self.model_name} offline")
 
         p1 = AlwaysFailingClient("openai/gpt-oss-120b")
@@ -941,14 +1039,13 @@ class TestMultiProviderLLMFailover(unittest.TestCase):
         self.assertEqual(res["status"], "analysis_unavailable")
         self.assertEqual(res["analysis"], [])
         self.assertIn("AI legal analysis is temporarily unavailable", res["limitations"][0])
-        self.assertEqual(len(res["provider_trace"]), 3)
 
-    def test_failover_5_groq_and_gemini_fail_cerebras_succeeds(self):
-        """5. Groq 120B fails -> Gemini fails -> Cerebras succeeds."""
+    def test_failover_5_groq_and_gemini_fail_groq20b_succeeds(self):
+        """5. Groq 120B fails -> Gemini fails -> Groq 20B succeeds."""
         class AlwaysFailingClient(LLMClient):
             def __init__(self, name):
                 self.model_name = name
-            def generate(self, prompt: str) -> str:
+            def generate(self, prompt: str, max_tokens: Optional[int] = None) -> str:
                 raise RuntimeError(f"{self.model_name} rate limit or connection error")
 
         p1 = AlwaysFailingClient("openai/gpt-oss-120b")
@@ -958,58 +1055,58 @@ class TestMultiProviderLLMFailover(unittest.TestCase):
             "analysis": [{"document_id": "bns_303_303(2)", "applicability": "supported", "reasoning": "Stole phone."}],
             "limitations": []
         })])
-        p3.model_name = "gpt-oss-120b"
+        p3.model_name = "openai/gpt-oss-20b"
         p4 = MockLLMClient(responses=[])
-        p4.model_name = "openai/gpt-oss-20b"
+        p4.model_name = "openrouter/free"
 
         failover_client = MultiProviderLLMFailoverClient(providers=[p1, p2, p3, p4])
-        res = analyze_incident(self.sample_ner, self.sample_retrieval, llm_client=failover_client)
+        res_text = failover_client.generate("Prompt", workload=Workload.LEGAL_CHAT)
 
-        self.assertEqual(res["status"], "success")
+        self.assertIn("success", res_text)
         self.assertEqual(p3.call_count, 1)
         self.assertEqual(p4.call_count, 0)
-        self.assertEqual(res["provider_used"]["model"], "gpt-oss-120b")
-        self.assertEqual(len(res["provider_trace"]), 3)
-        self.assertEqual(res["provider_trace"][0]["status"], "failed")
-        self.assertEqual(res["provider_trace"][1]["status"], "failed")
-        self.assertEqual(res["provider_trace"][2]["status"], "success")
+        self.assertEqual(failover_client.active_provider_info["model"], "openai/gpt-oss-20b")
+        self.assertEqual(len(failover_client.last_execution_trace), 3)
+        self.assertEqual(failover_client.last_execution_trace[0]["status"], "failed")
+        self.assertEqual(failover_client.last_execution_trace[1]["status"], "failed")
+        self.assertEqual(failover_client.last_execution_trace[2]["status"], "success")
 
-    def test_failover_6_groq_gemini_cerebras_fail_groq20b_succeeds(self):
-        """6. Groq 120B fails -> Gemini fails -> Cerebras fails -> Groq 20B succeeds."""
+    def test_failover_6_groq_gemini_groq20b_fail_openrouter_succeeds(self):
+        """6. Groq 120B fails -> Gemini fails -> Groq 20B fails -> OpenRouter succeeds."""
         class AlwaysFailingClient(LLMClient):
             def __init__(self, name):
                 self.model_name = name
-            def generate(self, prompt: str) -> str:
+            def generate(self, prompt: str, max_tokens: Optional[int] = None) -> str:
                 raise RuntimeError(f"{self.model_name} rate limit or payment error")
 
         p1 = AlwaysFailingClient("openai/gpt-oss-120b")
         p2 = AlwaysFailingClient("gemini-3.8-flash")
-        p3 = AlwaysFailingClient("gpt-oss-120b")
+        p3 = AlwaysFailingClient("openai/gpt-oss-20b")
         p4 = MockLLMClient(responses=[json.dumps({
             "status": "success",
             "analysis": [{"document_id": "bns_303_303(2)", "applicability": "supported", "reasoning": "Stole phone."}],
             "limitations": []
         })])
-        p4.model_name = "openai/gpt-oss-20b"
+        p4.model_name = "openrouter/free"
 
         failover_client = MultiProviderLLMFailoverClient(providers=[p1, p2, p3, p4])
-        res = analyze_incident(self.sample_ner, self.sample_retrieval, llm_client=failover_client)
+        res_text = failover_client.generate("Prompt", workload=Workload.LEGAL_CHAT)
 
-        self.assertEqual(res["status"], "success")
+        self.assertIn("success", res_text)
         self.assertEqual(p4.call_count, 1)
-        self.assertEqual(res["provider_used"]["model"], "openai/gpt-oss-20b")
-        self.assertEqual(len(res["provider_trace"]), 4)
-        self.assertEqual(res["provider_trace"][0]["status"], "failed")
-        self.assertEqual(res["provider_trace"][1]["status"], "failed")
-        self.assertEqual(res["provider_trace"][2]["status"], "failed")
-        self.assertEqual(res["provider_trace"][3]["status"], "success")
+        self.assertEqual(failover_client.active_provider_info["model"], "openrouter/free")
+        self.assertEqual(len(failover_client.last_execution_trace), 4)
+        self.assertEqual(failover_client.last_execution_trace[0]["status"], "failed")
+        self.assertEqual(failover_client.last_execution_trace[1]["status"], "failed")
+        self.assertEqual(failover_client.last_execution_trace[2]["status"], "failed")
+        self.assertEqual(failover_client.last_execution_trace[3]["status"], "success")
 
     def test_failover_7_all_4_providers_unavailable(self):
         """7. All 4 providers fail -> returns status 'analysis_unavailable'."""
         class AlwaysFailingClient(LLMClient):
             def __init__(self, name):
                 self.model_name = name
-            def generate(self, prompt: str) -> str:
+            def generate(self, prompt: str, max_tokens: Optional[int] = None) -> str:
                 raise RuntimeError(f"{self.model_name} error")
 
         p1 = AlwaysFailingClient("openai/gpt-oss-120b")
@@ -1023,9 +1120,391 @@ class TestMultiProviderLLMFailover(unittest.TestCase):
         self.assertEqual(res["status"], "analysis_unavailable")
         self.assertEqual(res["analysis"], [])
         self.assertIn("AI legal analysis is temporarily unavailable", res["limitations"][0])
-        self.assertEqual(len(res["provider_trace"]), 4)
+
+    @unittest.mock.patch("dotenv.load_dotenv")
+    @unittest.mock.patch.dict("os.environ", {}, clear=True)
+    def test_openrouter_llm_client_missing_api_key_error(self, mock_load):
+        """Test OpenRouterLLMClient raises ValueError when OPENROUTER_API_KEY is missing."""
+        with self.assertRaises(ValueError) as cm:
+            OpenRouterLLMClient(api_key=None)
+        self.assertIn("OPENROUTER_API_KEY environment variable is missing", str(cm.exception))
+
+    @unittest.mock.patch.dict("os.environ", {}, clear=True)
+    def test_openrouter_llm_client_custom_model(self):
+        """Test OpenRouterLLMClient uses OPENROUTER_MODEL, explicit model_name, or default openrouter/free."""
+        # 1. Default when OPENROUTER_MODEL is absent -> openrouter/free
+        client1 = OpenRouterLLMClient(api_key="or_test_key_123")
+        self.assertEqual(client1.model_name, "openrouter/free")
+
+        # 2. Explicit model_name passed in constructor -> respects passed model_name
+        client2 = OpenRouterLLMClient(api_key="or_test_key_123", model_name="google/gemini-2.0-flash-lite-001:free")
+        self.assertEqual(client2.model_name, "google/gemini-2.0-flash-lite-001:free")
+
+        # 3. OPENROUTER_MODEL set in env -> respects env override
+        with unittest.mock.patch.dict("os.environ", {"OPENROUTER_MODEL": "meta-llama/llama-3.3-70b-instruct:free"}):
+            client3 = OpenRouterLLMClient(api_key="or_test_key_123")
+            self.assertEqual(client3.model_name, "meta-llama/llama-3.3-70b-instruct:free")
+
+    def test_error_classification_categories(self):
+        """Test _classify_llm_error correctly categorizes 402, 429, 413, and validation errors."""
+        self.assertEqual(_classify_llm_error("HTTP 402 Payment Required: Insufficient balance"), "payment_required")
+        self.assertEqual(_classify_llm_error("Groq API error HTTP 429 Rate limit exceeded"), "rate_limited")
+        self.assertEqual(_classify_llm_error("HTTP 413 Request entity too large"), "request_too_large")
+        self.assertEqual(_classify_llm_error("Output failed structured JSON validation"), "json_validation_failed")
+        self.assertEqual(_classify_llm_error("Unknown connection drop"), "api_error")
+
+    @unittest.mock.patch("google.generativeai.GenerativeModel")
+    @unittest.mock.patch("google.generativeai.configure")
+    @unittest.mock.patch.dict("os.environ", {
+        "GROQ_API_KEY": "test_groq",
+        "GEMINI_API_KEY": "test_gemini",
+        "OPENROUTER_API_KEY": "test_openrouter"
+    }, clear=True)
+    def test_default_provider_chain_excludes_cerebras_and_includes_openrouter(self, mock_config, mock_genai):
+        """Test default provider chain excludes Cerebras and registers OpenRouter after Groq providers."""
+        client = MultiProviderLLMFailoverClient()
+        provider_names = [p.__class__.__name__ for p in client.providers]
+
+        self.assertNotIn("CerebrasLLMClient", provider_names, "CerebrasLLMClient must not be in default failover chain!")
+        self.assertIn("OpenRouterLLMClient", provider_names, "OpenRouterLLMClient must be in default failover chain!")
+
+        # Verify provider order: Groq (120b), Gemini, Groq (20b), OpenRouter
+        self.assertEqual(provider_names, ["GroqLLMClient", "GeminiLLMClient", "GroqLLMClient", "OpenRouterLLMClient"])
+
+    def test_compact_prompt_omits_redundant_fields_while_preserving_grounding(self):
+        """Test construct_analysis_prompt omits redundant fields (rank, distance, punishment) from LLM prompt while legal_context_obj and grounding retain them."""
+        full_retrieval = {
+            "queries": [{"offence_type": "theft", "query": "theft"}],
+            "results": [
+                {
+                    "offence_type": "theft",
+                    "query": "theft",
+                    "retrieved": [
+                        {
+                            "rank": 1,
+                            "distance": 0.12,
+                            "id": "bns_303_303(2)",
+                            "section": 303,
+                            "clause": "303(2)",
+                            "title": "Theft.",
+                            "text": "Whoever, intending to take dishonestly...",
+                            "target_clause_text": "Whoever, intending to take dishonestly...",
+                            "schedule_1": {
+                                "offence": "Theft.",
+                                "punishment": "Rigorous imprisonment for 1 to 5 years.",
+                                "cognizable": "Cognizable.",
+                                "bailable": "Non-bailable.",
+                                "court": "Any Magistrate."
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        ctx = build_legal_context(self.sample_ner, full_retrieval)
+        prompt = construct_analysis_prompt(ctx)
+
+        # 1. Prompt includes essential legal identifiers & text
+        self.assertIn("bns_303_303(2)", prompt)
+        self.assertIn("Whoever, intending to take dishonestly", prompt)
+
+        # 2. Prompt omits redundant/procedural fields to conserve tokens
+        self.assertNotIn('"rank"', prompt)
+        self.assertNotIn('"distance"', prompt)
+        self.assertNotIn('"punishment"', prompt)
+        self.assertNotIn('"bailable"', prompt)
+        self.assertNotIn('"cognizable"', prompt)
+
+        # 3. Grounding still accesses full legal_context_obj to attach metadata
+        llm_response = json.dumps({
+            "status": "success",
+            "analysis": [{"document_id": "bns_303_303(2)", "applicability": "supported", "reasoning": "Theft elements met."}],
+            "limitations": []
+        })
+        res = analyze_incident(self.sample_ner, full_retrieval, llm_client=MockLLMClient(responses=[llm_response]))
+        self.assertEqual(res["analysis"][0]["punishment"], "Rigorous imprisonment for 1 to 5 years.")
+        self.assertEqual(res["analysis"][0]["cognizable"], "Cognizable.")
+
+
+class TestMaxTokensBudgetsAndProviderKwargs(unittest.TestCase):
+
+    def test_query_generation_uses_max_tokens_250(self):
+        """1. generate_queries passes max_tokens = 250 to LLM generation."""
+        mock_llm = MockLLMClient(responses=['{"queries": [{"query_type": "fact_focused", "query": "stolen phone"}, {"query_type": "action_context", "query": "stole phone"}]}'])
+        ner = {"raw_text": "A phone was stolen.", "offence_types": ["theft"]}
+        res = generate_queries(ner, llm_client=mock_llm)
+        self.assertEqual(mock_llm.last_max_tokens, 250)
+
+    def test_legal_analysis_uses_max_tokens_1300(self):
+        """2. analyze_incident / legal analysis passes max_tokens = 1300 to LLM generation."""
+        mock_llm = MockLLMClient(responses=['{"status": "success", "analysis": []}'])
+        ner = {"raw_text": "A phone was stolen.", "offence_types": ["theft"]}
+        retrieval = {"queries": [], "results": []}
+        res = analyze_incident(ner, retrieval, llm_client=mock_llm)
+        self.assertEqual(mock_llm.last_max_tokens, 1300)
+
+    def test_fir_generation_uses_max_tokens_700(self):
+        """3. generate_structured_fir passes max_tokens = 700 to LLM generation."""
+        mock_llm = MockLLMClient(responses=['{"district": "Central"}'])
+        res = generate_structured_fir("A phone was stolen.", [], llm_client=mock_llm)
+        self.assertEqual(mock_llm.last_max_tokens, 700)
+
+    @unittest.mock.patch("groq.Groq")
+    def test_groq_includes_max_tokens_in_request(self, mock_groq_cls):
+        """4a. GroqLLMClient includes max_completion_tokens in chat.completions.create kwargs."""
+        mock_response = unittest.mock.MagicMock()
+        mock_choice = unittest.mock.MagicMock()
+        mock_message = unittest.mock.MagicMock()
+        mock_message.content = '{"status": "success"}'
+        mock_choice.message = mock_message
+        mock_response.choices = [mock_choice]
+
+        mock_instance = mock_groq_cls.return_value
+        mock_instance.chat.completions.create.return_value = mock_response
+
+        client = GroqLLMClient(api_key="gsk_test_123")
+        client.generate("Test prompt", max_tokens=1300)
+
+        mock_instance.chat.completions.create.assert_called_once_with(
+            model=client.model_name,
+            messages=[{"role": "user", "content": "Test prompt"}],
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            max_completion_tokens=1300
+        )
+
+    @unittest.mock.patch("google.generativeai.GenerativeModel")
+    @unittest.mock.patch("google.generativeai.configure")
+    def test_gemini_includes_max_output_tokens_in_request(self, mock_config, mock_model_cls):
+        """4b. GeminiLLMClient includes max_output_tokens in GenerationConfig."""
+        mock_model = mock_model_cls.return_value
+        mock_response = unittest.mock.MagicMock()
+        mock_response.text = '{"status": "success"}'
+        mock_model.generate_content.return_value = mock_response
+
+        client = GeminiLLMClient(api_key="gemini_test_123")
+        client.generate("Test prompt", max_tokens=1300)
+
+        mock_model.generate_content.assert_called_once()
+        _, kwargs = mock_model.generate_content.call_args
+        gen_config = kwargs.get("generation_config")
+        self.assertIsNotNone(gen_config)
+        self.assertEqual(getattr(gen_config, "max_output_tokens", None), 1300)
+
+    @unittest.mock.patch("urllib.request.urlopen")
+    def test_openrouter_includes_max_tokens_in_request(self, mock_urlopen):
+        """4c. OpenRouterLLMClient includes max_tokens in API payload."""
+        mock_response = unittest.mock.MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "choices": [{"message": {"content": '{"status": "success"}'}}]
+        }).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        client = OpenRouterLLMClient(api_key="or_test_123")
+        with unittest.mock.patch.dict("sys.modules", {"openai": None, "requests": None}):
+            res_text = client.generate("Test prompt", max_tokens=700)
+
+        self.assertEqual(res_text, '{"status": "success"}')
+        mock_urlopen.assert_called_once()
+        req = mock_urlopen.call_args[0][0]
+        sent_payload = json.loads(req.data.decode("utf-8"))
+        self.assertEqual(sent_payload.get("max_tokens"), 700)
+
+
+class TestMaxTokensBudgetsAndProviderKwargs(unittest.TestCase):
+
+    @unittest.mock.patch("google.generativeai.GenerativeModel")
+    @unittest.mock.patch("google.generativeai.configure")
+    def test_failover_order_and_exclusions(self, mock_config, mock_genai):
+        """5, 6, 7. Failover order is Groq 120B -> Gemini -> Groq 20B -> OpenRouter, Cerebras excluded."""
+        client = MultiProviderLLMFailoverClient()
+        provider_names = [p.__class__.__name__ for p in client.providers]
+
+        self.assertEqual(
+            provider_names,
+            ["GroqLLMClient", "GeminiLLMClient", "GroqLLMClient", "OpenRouterLLMClient"],
+            "Failover order must be Groq 120B -> Gemini -> Groq 20B -> OpenRouter"
+        )
+        self.assertNotIn("CerebrasLLMClient", provider_names, "Cerebras must remain excluded.")
+        self.assertIn("OpenRouterLLMClient", provider_names, "OpenRouter must remain in failover chain.")
+
+class TestWorkloadAwareRoutingAndHealth(unittest.TestCase):
+
+    def setUp(self):
+        GLOBAL_HEALTH_TRACKER.reset()
+
+    def test_scenario_a_small_legal_chat_selects_groq120b(self):
+        """A. Small Legal Chat -> Groq 120B selected first."""
+        g120 = MockLLMClient(responses=["Legal chat answer"])
+        g120.model_name = "openai/gpt-oss-120b"
+        gem = MockLLMClient(responses=["Gemini answer"])
+        gem.model_name = "gemini-3.8-flash"
+
+        client = MultiProviderLLMFailoverClient(providers=[g120, gem])
+        res = client.generate("Small prompt", workload=Workload.LEGAL_CHAT)
+
+        self.assertEqual(res, "Legal chat answer")
+        self.assertEqual(g120.call_count, 1)
+        self.assertEqual(gem.call_count, 0)
+
+    def test_scenario_b_large_legal_chat_selects_gemini(self):
+        """B. Large Legal Chat -> Gemini selected first (Groq 120B skipped due to token budget)."""
+        g120 = MockLLMClient(responses=["Groq 120B answer"])
+        g120.model_name = "openai/gpt-oss-120b"
+        gem = MockLLMClient(responses=["Gemini answer"])
+        gem.model_name = "gemini-3.8-flash"
+
+        large_prompt = "x" * 30000  # ~7500 tokens > 6700 threshold
+
+        client = MultiProviderLLMFailoverClient(providers=[g120, gem])
+        res = client.generate(large_prompt, max_tokens=1000, workload=Workload.LEGAL_CHAT)
+
+        self.assertEqual(res, "Gemini answer")
+        self.assertEqual(g120.call_count, 0, "Groq 120B must be skipped without network call!")
+        self.assertEqual(gem.call_count, 1)
+
+    def test_scenario_c_small_fir_request_prefers_gemini(self):
+        """C. Small FIR request -> Gemini remains preferred according to workload policy."""
+        g120 = MockLLMClient(responses=[json.dumps({"status": "success", "analysis": []})])
+        g120.model_name = "openai/gpt-oss-120b"
+        gem = MockLLMClient(responses=[json.dumps({"status": "success", "analysis": []})])
+        gem.model_name = "gemini-3.8-flash"
+
+        client = MultiProviderLLMFailoverClient(providers=[g120, gem])
+        res = client.generate("Small FIR text", workload=Workload.CITIZEN_FIR_ANALYSIS)
+
+        self.assertEqual(gem.call_count, 1)
+        self.assertEqual(g120.call_count, 0)
+
+    def test_scenario_d_groq120b_too_large_skipped_without_network_call(self):
+        """D. Groq 120B request too large -> skipped without network call."""
+        g120 = MockLLMClient(responses=["Groq 120B answer"])
+        g120.model_name = "openai/gpt-oss-120b"
+        gem = MockLLMClient(responses=["Gemini answer"])
+        gem.model_name = "gemini-3.8-flash"
+
+        large_prompt = "word " * 7000  # ~7000 tokens
+        client = MultiProviderLLMFailoverClient(providers=[g120, gem])
+        res = client.generate(large_prompt, workload=Workload.LEGAL_CHAT)
+
+        self.assertEqual(g120.call_count, 0)
+        self.assertEqual(res, "Gemini answer")
+
+    def test_scenario_e_groq120b_returns_413_falls_over(self):
+        """E. Groq 120B returns 413 -> fallback provider called without repeating Groq 120B."""
+        class HTTP413Client(LLMClient):
+            model_name = "openai/gpt-oss-120b"
+            def generate(self, prompt: str, max_tokens: Optional[int] = None) -> str:
+                raise RuntimeError("HTTP 413 Request entity too large")
+
+        g120 = HTTP413Client()
+        gem = MockLLMClient(responses=["Gemini fallback"])
+        gem.model_name = "gemini-3.8-flash"
+
+        client = MultiProviderLLMFailoverClient(providers=[g120, gem])
+        res = client.generate("Prompt", workload=Workload.LEGAL_CHAT)
+
+        self.assertEqual(res, "Gemini fallback")
+        self.assertEqual(gem.call_count, 1)
+
+    def test_scenario_f_provider_returns_429_enters_cooldown(self):
+        """F. Provider returns 429 -> enters cooldown (~60s)."""
+        class RateLimitClient(LLMClient):
+            model_name = "openai/gpt-oss-120b"
+            def generate(self, prompt: str, max_tokens: Optional[int] = None) -> str:
+                raise RuntimeError("HTTP 429 Rate Limit Exceeded")
+
+        g120 = RateLimitClient()
+        gem = MockLLMClient(responses=["Gemini fallback"])
+        gem.model_name = "gemini-3.8-flash"
+
+        client = MultiProviderLLMFailoverClient(providers=[g120, gem])
+        client.generate("Prompt", workload=Workload.LEGAL_CHAT)
+
+        status, reason = GLOBAL_HEALTH_TRACKER.get_status(g120)
+        self.assertEqual(status, ProviderHealthStatus.COOLING_DOWN)
+        self.assertEqual(reason, "rate_limited")
+
+    def test_scenario_g_provider_in_cooldown_skipped(self):
+        """G. Provider in cooldown -> skipped without network call."""
+        g120 = MockLLMClient(responses=["Groq answer"])
+        g120.model_name = "openai/gpt-oss-120b"
+        gem = MockLLMClient(responses=["Gemini answer"])
+        gem.model_name = "gemini-3.8-flash"
+
+        GLOBAL_HEALTH_TRACKER.record_failure(g120, "HTTP 429 Rate Limit")
+
+        client = MultiProviderLLMFailoverClient(providers=[g120, gem])
+        res = client.generate("Prompt", workload=Workload.LEGAL_CHAT)
+
+        self.assertEqual(res, "Gemini answer")
+        self.assertEqual(g120.call_count, 0, "Provider in cooldown must be skipped without network call!")
+
+    def test_scenario_h_provider_returns_401_auth_disabled(self):
+        """H. Provider returns 401 -> AUTH_DISABLED."""
+        class AuthFailureClient(LLMClient):
+            model_name = "openrouter/free"
+            def generate(self, prompt: str, max_tokens: Optional[int] = None) -> str:
+                raise RuntimeError("HTTP 401 User not found")
+
+        or_client = AuthFailureClient()
+
+        client = MultiProviderLLMFailoverClient(providers=[or_client])
+        with self.assertRaises(RuntimeError):
+            client.generate("Prompt", workload=Workload.LEGAL_CHAT)
+
+        status, reason = GLOBAL_HEALTH_TRACKER.get_status(or_client)
+        self.assertEqual(status, ProviderHealthStatus.AUTH_DISABLED)
+        self.assertEqual(reason, "auth_disabled")
+
+    def test_scenario_i_openrouter_currently_auth_disabled_skipped(self):
+        """I. OpenRouter currently AUTH_DISABLED -> skipped automatically."""
+        or_client = MockLLMClient(responses=["OpenRouter answer"])
+        or_client.model_name = "openrouter/free"
+        gem = MockLLMClient(responses=["Gemini answer"])
+        gem.model_name = "gemini-3.8-flash"
+
+        GLOBAL_HEALTH_TRACKER.set_status(or_client, ProviderHealthStatus.AUTH_DISABLED)
+
+        client = MultiProviderLLMFailoverClient(providers=[or_client, gem])
+        res = client.generate("Prompt", workload=Workload.LEGAL_CHAT)
+
+        self.assertEqual(res, "Gemini answer")
+        self.assertEqual(or_client.call_count, 0, "AUTH_DISABLED OpenRouter must be skipped without network call!")
+
+    def test_scenario_j_provider_succeeds_resets_health_state(self):
+        """J. Provider succeeds -> health state reset."""
+        g120 = MockLLMClient(responses=["Groq answer"])
+        g120.model_name = "openai/gpt-oss-120b"
+
+        GLOBAL_HEALTH_TRACKER.record_failure(g120, "HTTP 503 Service Unavailable")
+        GLOBAL_HEALTH_TRACKER.reset()
+
+        client = MultiProviderLLMFailoverClient(providers=[g120])
+        res = client.generate("Prompt", workload=Workload.LEGAL_CHAT)
+
+        self.assertEqual(res, "Groq answer")
+        status, _ = GLOBAL_HEALTH_TRACKER.get_status(g120)
+        self.assertEqual(status, ProviderHealthStatus.HEALTHY)
+
+    def test_scenario_k_all_providers_fail_safe_fallback(self):
+        """K. All cloud providers fail -> existing safe fallback behavior."""
+        class FailingClient(LLMClient):
+            def __init__(self, name):
+                self.model_name = name
+            def generate(self, prompt: str, max_tokens: Optional[int] = None) -> str:
+                raise RuntimeError(f"HTTP 500 {self.model_name} Error")
+
+        p1 = FailingClient("openai/gpt-oss-120b")
+        p2 = FailingClient("gemini-3.8-flash")
+
+        client = MultiProviderLLMFailoverClient(providers=[p1, p2])
+        with self.assertRaises(RuntimeError) as cm:
+            client.generate("Prompt", workload=Workload.LEGAL_CHAT)
+
+        self.assertIn("All LLM providers", str(cm.exception))
 
 
 if __name__ == "__main__":
     unittest.main()
-

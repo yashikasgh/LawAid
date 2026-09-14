@@ -78,7 +78,7 @@ def extract_statement(body: ExtractStatementRequest):
 
     extracted_data = {}
     try:
-        from ai.rag.analysis.legal_analyzer import MultiProviderLLMFailoverClient
+        from ai.rag.analysis.legal_analyzer import MultiProviderLLMFailoverClient, Workload
         import json
 
         client = MultiProviderLLMFailoverClient()
@@ -103,7 +103,7 @@ def extract_statement(body: ExtractStatementRequest):
             "STATEMENT TEXT:\n"
             f"{raw_statement}\n"
         )
-        llm_raw = client.generate(prompt)
+        llm_raw = client.generate(prompt, workload=Workload.POLICE_FIR_DRAFT)
         cleaned = llm_raw.strip()
         if cleaned.startswith("```json"):
             cleaned = cleaned[7:]

@@ -7,8 +7,11 @@ import json
 import os
 import re
 import sys
+import threading
+import time
+from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple, Union
 
 # Ensure analysis directory is on sys.path
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -16,6 +19,30 @@ if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
 from context_builder import build_legal_context
+
+
+class Workload(str, Enum):
+    LEGAL_CHAT = "LEGAL_CHAT"
+    CITIZEN_FIR_ANALYSIS = "CITIZEN_FIR_ANALYSIS"
+    POLICE_FIR_DRAFT = "POLICE_FIR_DRAFT"
+    LAWYER_LEGAL_DRAFT = "LAWYER_LEGAL_DRAFT"
+
+
+class ProviderHealthStatus(str, Enum):
+    HEALTHY = "HEALTHY"
+    COOLING_DOWN = "COOLING_DOWN"
+    AUTH_DISABLED = "AUTH_DISABLED"
+    QUOTA_EXHAUSTED = "QUOTA_EXHAUSTED"
+
+
+GROQ_SAFE_REQUEST_TOKEN_BUDGET = int(os.environ.get("GROQ_SAFE_REQUEST_TOKEN_BUDGET", "6700"))
+
+
+def estimate_tokens(text: str) -> int:
+    """Fast, dependency-free token count estimation (~4 characters or ~0.75 words per token)."""
+    if not text:
+        return 0
+    return len(text) // 4 + 1
 
 
 LEGAL_ANALYSIS_SCHEMA = {
@@ -124,7 +151,7 @@ LEGAL_ANALYSIS_SCHEMA = {
 
 class LLMClient:
     """Base interface for swappable LLM generation backends."""
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, max_tokens: Optional[int] = None, **kwargs) -> str:
         raise NotImplementedError("Subclasses must implement generate()")
 
 
@@ -133,7 +160,7 @@ class OllamaLLMClient(LLMClient):
     def __init__(self, model_name: Optional[str] = None):
         self.model_name = model_name or os.environ.get("OLLAMA_LLM_MODEL")
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, max_tokens: Optional[int] = None, **kwargs) -> str:
         if not self.model_name:
             raise RuntimeError(
                 "No generative LLM model configured. Please set OLLAMA_LLM_MODEL environment variable "
@@ -145,11 +172,14 @@ class OllamaLLMClient(LLMClient):
             )
         import ollama
         try:
+            opts = {"temperature": 0}
+            if max_tokens is not None:
+                opts["num_predict"] = max_tokens
             response = ollama.chat(
                 model=self.model_name,
                 messages=[{"role": "user", "content": prompt}],
                 format=LEGAL_ANALYSIS_SCHEMA,
-                options={"temperature": 0}
+                options=opts
             )
             return response.get("message", {}).get("content", "")
         except Exception as e:
@@ -162,9 +192,13 @@ class MockLLMClient(LLMClient):
         self.responses = responses or []
         self.call_count = 0
         self.prompts_received = []
+        self.last_max_tokens = None
+        self.max_tokens_received = []
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, max_tokens: Optional[int] = None, **kwargs) -> str:
         self.prompts_received.append(prompt)
+        self.last_max_tokens = max_tokens
+        self.max_tokens_received.append(max_tokens)
         if self.call_count < len(self.responses):
             resp = self.responses[self.call_count]
             self.call_count += 1
@@ -197,14 +231,23 @@ class GroqLLMClient(LLMClient):
         except Exception as e:
             raise RuntimeError(f"Failed to initialize Groq client: {e}")
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, max_tokens: Optional[int] = None, **kwargs) -> str:
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-                response_format={"type": "json_object"}
+            workload = kwargs.get("workload")
+            is_json_mode = (
+                workload != Workload.LEGAL_CHAT
+                or "json" in prompt.lower()
             )
+            req_kwargs = {
+                "model": self.model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.0,
+            }
+            if is_json_mode:
+                req_kwargs["response_format"] = {"type": "json_object"}
+            if max_tokens is not None:
+                req_kwargs["max_completion_tokens"] = max_tokens
+            response = self.client.chat.completions.create(**req_kwargs)
             if response.choices and len(response.choices) > 0:
                 message = response.choices[0].message
                 return message.content if message and message.content else ""
@@ -245,9 +288,17 @@ class GeminiLLMClient(LLMClient):
         except Exception as e:
             raise RuntimeError(f"Failed to initialize Gemini client for model '{self.model_name}': {e}")
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, max_tokens: Optional[int] = None, **kwargs) -> str:
         try:
-            response = self.model.generate_content(prompt)
+            import google.generativeai as genai
+            config_kwargs = {
+                "response_mime_type": "application/json",
+                "temperature": 0.0
+            }
+            if max_tokens is not None:
+                config_kwargs["max_output_tokens"] = max_tokens
+            gen_config = genai.GenerationConfig(**config_kwargs)
+            response = self.model.generate_content(prompt, generation_config=gen_config)
             if hasattr(response, "text") and response.text:
                 return response.text
             return ""
@@ -280,14 +331,17 @@ class CerebrasLLMClient(LLMClient):
         except Exception as e:
             raise RuntimeError(f"Failed to initialize Cerebras client: {e}")
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, max_tokens: Optional[int] = None, **kwargs) -> str:
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-                response_format={"type": "json_object"}
-            )
+            kwargs_req = {
+                "model": self.model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.0,
+                "response_format": {"type": "json_object"}
+            }
+            if max_tokens is not None:
+                kwargs_req["max_tokens"] = max_tokens
+            response = self.client.chat.completions.create(**kwargs_req)
             if response.choices and len(response.choices) > 0:
                 message = response.choices[0].message
                 return message.content if message and message.content else ""
@@ -296,22 +350,267 @@ class CerebrasLLMClient(LLMClient):
             raise RuntimeError(f"Cerebras API text generation failed for model '{self.model_name}': {e}")
 
 
+class OpenRouterLLMClient(LLMClient):
+    """OpenRouter API text generation client adapter (OpenAI-compatible REST/SDK client)."""
+    def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
+        try:
+            from dotenv import load_dotenv
+            repo_root_env = CURRENT_DIR.parents[1] / ".env"
+            if repo_root_env.exists():
+                load_dotenv(dotenv_path=repo_root_env, override=True)
+            else:
+                load_dotenv(override=True)
+        except ImportError:
+            pass
+
+        raw_key = api_key or os.environ.get("OPENROUTER_API_KEY")
+        if not raw_key:
+            raise ValueError("OPENROUTER_API_KEY environment variable is missing.")
+        self.api_key = raw_key.strip().strip('"').strip("'")
+
+        self.model_name = model_name or os.environ.get("OPENROUTER_MODEL") or "openrouter/free"
+        self.base_url = "https://openrouter.ai/api/v1"
+
+    def generate(self, prompt: str, max_tokens: Optional[int] = None, **kwargs) -> str:
+        workload = kwargs.get("workload")
+        is_json_mode = (
+            workload != Workload.LEGAL_CHAT
+            or "json" in prompt.lower()
+        )
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://lawaid.app",
+            "X-Title": "LawAid RAG Legal Analyzer"
+        }
+        payload = {
+            "model": self.model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+        }
+        if is_json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+
+        try:
+            try:
+                from openai import OpenAI
+                client = OpenAI(
+                    base_url=self.base_url,
+                    api_key=self.api_key,
+                    default_headers={
+                        "HTTP-Referer": "https://lawaid.app",
+                        "X-Title": "LawAid RAG Legal Analyzer"
+                    }
+                )
+                sdk_kwargs = {
+                    "model": self.model_name,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.0,
+                }
+                if is_json_mode:
+                    sdk_kwargs["response_format"] = {"type": "json_object"}
+                if max_tokens is not None:
+                    sdk_kwargs["max_tokens"] = max_tokens
+                response = client.chat.completions.create(**sdk_kwargs)
+                if response.choices and len(response.choices) > 0:
+                    message = response.choices[0].message
+                    return message.content if message and message.content else ""
+                return ""
+            except ImportError:
+                try:
+                    import requests
+                    resp = requests.post(
+                        f"{self.base_url}/chat/completions",
+                        headers=headers,
+                        json=payload,
+                        timeout=60
+                    )
+                    if resp.status_code != 200:
+                        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
+                    data = resp.json()
+                    choices = data.get("choices", [])
+                    if choices:
+                        msg = choices[0].get("message", {})
+                        return msg.get("content", "")
+                    return ""
+                except ImportError:
+                    import urllib.request
+                    import urllib.error
+                    req = urllib.request.Request(
+                        f"{self.base_url}/chat/completions",
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers=headers,
+                        method="POST"
+                    )
+                    try:
+                        with urllib.request.urlopen(req, timeout=60) as resp:
+                            res_body = resp.read().decode("utf-8")
+                            data = json.loads(res_body)
+                            choices = data.get("choices", [])
+                            if choices:
+                                msg = choices[0].get("message", {})
+                                return msg.get("content", "")
+                            return ""
+                    except urllib.error.HTTPError as http_err:
+                        body = http_err.read().decode("utf-8", errors="ignore")
+                        raise RuntimeError(f"HTTP {http_err.code}: {body}")
+        except Exception as e:
+            raise RuntimeError(f"OpenRouter API text generation failed for model '{self.model_name}': {e}")
+
+
+class ProviderHealthTracker:
+    """Thread-safe, in-memory circuit breaker and health tracker for LLM providers."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._health_map: Dict[str, Dict[str, Any]] = {}
+
+    def get_provider_key(self, client: LLMClient) -> str:
+        provider_name = client.__class__.__name__
+        model_name = getattr(client, "model_name", "default")
+        return f"{provider_name}:{model_name}"
+
+    def is_healthy(self, client: LLMClient, prompt: str, max_tokens: Optional[int] = None) -> Tuple[bool, str]:
+        key = self.get_provider_key(client)
+        now = time.time()
+
+        # Prompt size check for Groq models
+        m_name = getattr(client, "model_name", "").lower()
+        if isinstance(client, GroqLLMClient) or "gpt-oss" in m_name or "groq" in m_name:
+            in_tokens = estimate_tokens(prompt)
+            out_tokens = max_tokens if max_tokens is not None else 1300
+            tot_tokens = in_tokens + out_tokens
+            if tot_tokens > GROQ_SAFE_REQUEST_TOKEN_BUDGET:
+                return False, f"Prompt size ({tot_tokens} est tokens) exceeds Groq safe limit ({GROQ_SAFE_REQUEST_TOKEN_BUDGET})."
+
+        with self._lock:
+            info = self._health_map.get(key, {})
+            status = info.get("status", ProviderHealthStatus.HEALTHY)
+            cooldown_until = info.get("cooldown_until", 0)
+
+            if status == ProviderHealthStatus.AUTH_DISABLED:
+                return False, "Provider authentication disabled (HTTP 401)."
+
+            if status in (ProviderHealthStatus.COOLING_DOWN, ProviderHealthStatus.QUOTA_EXHAUSTED):
+                if now < cooldown_until:
+                    rem = round(cooldown_until - now, 1)
+                    return False, f"Provider in {status} cooldown ({rem}s remaining)."
+                else:
+                    self._health_map[key] = {
+                        "status": ProviderHealthStatus.HEALTHY,
+                        "cooldown_until": 0,
+                        "consecutive_failures": 0,
+                        "last_failure_type": None
+                    }
+                    return True, "Healthy (cooldown expired)."
+
+            return True, "Healthy"
+
+    def record_success(self, client: LLMClient):
+        key = self.get_provider_key(client)
+        with self._lock:
+            self._health_map[key] = {
+                "status": ProviderHealthStatus.HEALTHY,
+                "cooldown_until": 0,
+                "consecutive_failures": 0,
+                "last_failure_type": None
+            }
+
+    def record_failure(self, client: LLMClient, err_msg: str):
+        key = self.get_provider_key(client)
+        err_lower = err_msg.lower()
+        now = time.time()
+        error_category = _classify_llm_error(err_msg)
+
+        with self._lock:
+            info = self._health_map.get(key, {"consecutive_failures": 0})
+            failures = info.get("consecutive_failures", 0) + 1
+
+            if error_category == "payment_required" or "402" in err_msg:
+                status = ProviderHealthStatus.QUOTA_EXHAUSTED
+                cooldown_sec = 3600
+            elif "401" in err_msg or "user not found" in err_lower or "unauthorized" in err_lower:
+                status = ProviderHealthStatus.AUTH_DISABLED
+                cooldown_sec = 86400 * 365
+            elif error_category in ("rate_limited", "request_too_large") or "429" in err_msg or "413" in err_msg:
+                status = ProviderHealthStatus.COOLING_DOWN
+                cooldown_sec = 60
+            else:
+                status = ProviderHealthStatus.COOLING_DOWN
+                cooldown_sec = 30
+
+            self._health_map[key] = {
+                "status": status,
+                "cooldown_until": now + cooldown_sec,
+                "consecutive_failures": failures,
+                "last_failure_type": error_category
+            }
+
+    def reset(self) -> None:
+        """Resets all health states (useful for testing and config reload)."""
+        with self._lock:
+            self._health_map.clear()
+
+    def get_status(self, client_or_key: Union[LLMClient, str]) -> Tuple[ProviderHealthStatus, Optional[str]]:
+        target_key = self.get_provider_key(client_or_key) if isinstance(client_or_key, LLMClient) else str(client_or_key)
+        with self._lock:
+            info = self._health_map.get(target_key)
+            if not info:
+                for k, v in self._health_map.items():
+                    if k.endswith(f":{target_key}") or k == target_key:
+                        info = v
+                        break
+            if not info:
+                return ProviderHealthStatus.HEALTHY, None
+            status = info.get("status", ProviderHealthStatus.HEALTHY)
+            last_fail = info.get("last_failure_type")
+            return status, last_fail
+
+    def set_status(self, client: LLMClient, status: ProviderHealthStatus, cooldown_sec: int = 0):
+        key = self.get_provider_key(client)
+        with self._lock:
+            self._health_map[key] = {
+                "status": status,
+                "cooldown_until": time.time() + cooldown_sec if cooldown_sec > 0 else 0,
+                "consecutive_failures": 1 if status != ProviderHealthStatus.HEALTHY else 0,
+                "last_failure_type": status.value
+            }
+
+
+GLOBAL_HEALTH_TRACKER = ProviderHealthTracker()
+
+
+def _classify_llm_error(err_msg: str) -> str:
+    """Classify LLM provider failure for clear trace diagnosis and skip handling."""
+    err_lower = err_msg.lower()
+    if "401" in err_msg or "user not found" in err_lower or "unauthorized" in err_lower or "invalid api key" in err_lower:
+        return "auth_disabled"
+    elif "402" in err_msg or "payment required" in err_lower or "insufficient_quota" in err_lower or "credit" in err_lower:
+        return "payment_required"
+    elif "429" in err_msg or "rate limit" in err_lower or "rate_limit" in err_lower or "quota" in err_lower or "resource_exhausted" in err_lower:
+        return "rate_limited"
+    elif "413" in err_msg or "too large" in err_lower or "context_length_exceeded" in err_lower or "request entity too large" in err_lower:
+        return "request_too_large"
+    elif "json" in err_lower or "parse" in err_lower or "validation" in err_lower:
+        return "json_validation_failed"
+    else:
+        return "api_error"
+
+
 class MultiProviderLLMFailoverClient(LLMClient):
     """
     Production-quality multi-provider LLM failover manager for LawAid RAG.
 
-    Priority order:
-    1. Google Gemini — gemini-3.8-flash (Primary)
-    2. Groq — openai/gpt-oss-120b
-    3. Cerebras — gpt-oss-120b (Free/Low-cost Tier)
-    4. Groq — openai/gpt-oss-20b
+    Workload-aware routing & circuit breaker health tracking.
     """
 
-    def __init__(self, providers: Optional[List[LLMClient]] = None):
+    def __init__(self, providers: Optional[List[LLMClient]] = None, health_tracker: Optional[ProviderHealthTracker] = None):
         if providers is not None:
             self.providers = providers
         else:
             self.providers = self._build_default_provider_chain()
+        self.health_tracker = health_tracker or GLOBAL_HEALTH_TRACKER
         self.last_execution_trace: List[Dict[str, Any]] = []
         self.active_provider_info: Dict[str, str] = {}
 
@@ -329,35 +628,35 @@ class MultiProviderLLMFailoverClient(LLMClient):
 
         groq_key = os.environ.get("GROQ_API_KEY")
         gemini_key = os.environ.get("GEMINI_API_KEY")
-        cerebras_key = os.environ.get("CEREBRAS_API_KEY")
+        openrouter_key = os.environ.get("OPENROUTER_API_KEY")
 
-        # 1. Gemini 3.8 Flash (Primary)
-        if gemini_key:
-            try:
-                chain.append(GeminiLLMClient(api_key=gemini_key, model_name="gemini-3.8-flash"))
-            except Exception as e:
-                print(f"[LLM Failover Config Warning] Gemini init skipped: {e}")
-
-        # 2. Groq GPT-OSS 120B
+        # 1. Groq GPT-OSS 120B
         if groq_key:
             try:
                 chain.append(GroqLLMClient(api_key=groq_key, model_name="openai/gpt-oss-120b"))
             except Exception as e:
                 print(f"[LLM Failover Config Warning] Groq 120B init skipped: {e}")
 
-        # 3. Cerebras GPT-OSS 120B
-        if cerebras_key:
+        # 2. Gemini 3.8 Flash (Free Tier)
+        if gemini_key:
             try:
-                chain.append(CerebrasLLMClient(api_key=cerebras_key, model_name="gpt-oss-120b"))
+                chain.append(GeminiLLMClient(api_key=gemini_key, model_name="gemini-3.8-flash"))
             except Exception as e:
-                print(f"[LLM Failover Config Warning] Cerebras init skipped: {e}")
+                print(f"[LLM Failover Config Warning] Gemini init skipped: {e}")
 
-        # 4. Groq GPT-OSS 20B
+        # 3. Groq GPT-OSS 20B
         if groq_key:
             try:
                 chain.append(GroqLLMClient(api_key=groq_key, model_name="openai/gpt-oss-20b"))
             except Exception as e:
                 print(f"[LLM Failover Config Warning] Groq 20B init skipped: {e}")
+
+        # 4. OpenRouter Fallback
+        if openrouter_key:
+            try:
+                chain.append(OpenRouterLLMClient(api_key=openrouter_key))
+            except Exception as e:
+                print(f"[LLM Failover Config Warning] OpenRouter init skipped: {e}")
 
         # 5. Fallback to Ollama if configured and no cloud keys available
         if not chain and os.environ.get("OLLAMA_LLM_MODEL"):
@@ -368,58 +667,144 @@ class MultiProviderLLMFailoverClient(LLMClient):
 
         return chain
 
-    def generate(self, prompt: str) -> str:
-        import time
+    def _get_ordered_providers(self, workload: Union[Workload, str], is_large: bool) -> List[LLMClient]:
+        workload_str = str(workload.value if isinstance(workload, Workload) else workload).upper()
 
+        groq_120b = None
+        groq_20b = None
+        gemini = None
+        openrouter = None
+        ollama = None
+
+        for p in self.providers:
+            p_name = p.__class__.__name__
+            m_name = getattr(p, "model_name", "")
+            is_20b = ("20b" in m_name and "120b" not in m_name)
+            is_120b = ("120b" in m_name or (p_name == "GroqLLMClient" and not is_20b))
+
+            if is_120b:
+                if groq_120b is None:
+                    groq_120b = p
+            elif is_20b:
+                if groq_20b is None:
+                    groq_20b = p
+            elif p_name == "GeminiLLMClient" or "gemini" in m_name:
+                if gemini is None:
+                    gemini = p
+            elif p_name == "OpenRouterLLMClient" or "openrouter" in m_name:
+                if openrouter is None:
+                    openrouter = p
+            elif p_name == "OllamaLLMClient" or "ollama" in m_name:
+                if ollama is None:
+                    ollama = p
+
+        ordered = []
+
+        if workload_str in ("LEGAL_CHAT", "LAWYER_LEGAL_DRAFT"):
+            if is_large:
+                # Large context: Gemini -> Groq 120B -> Groq 20B -> OpenRouter -> Ollama
+                candidates = [gemini, groq_120b, groq_20b, openrouter, ollama]
+            else:
+                # Small context: Groq 120B -> Gemini -> Groq 20B -> OpenRouter -> Ollama
+                candidates = [groq_120b, gemini, groq_20b, openrouter, ollama]
+        elif workload_str in ("CITIZEN_FIR_ANALYSIS", "POLICE_FIR_DRAFT"):
+            # Gemini -> Groq 120B -> Groq 20B -> OpenRouter -> Ollama
+            candidates = [gemini, groq_120b, groq_20b, openrouter, ollama]
+        else:
+            candidates = [groq_120b, gemini, groq_20b, openrouter, ollama]
+
+        for c in candidates:
+            if c is not None and c not in ordered:
+                ordered.append(c)
+
+        for p in self.providers:
+            if p not in ordered:
+                ordered.append(p)
+
+        return ordered
+
+    def generate(
+        self,
+        prompt: str,
+        max_tokens: Optional[int] = None,
+        workload: Union[Workload, str] = Workload.CITIZEN_FIR_ANALYSIS
+    ) -> str:
         self.last_execution_trace = []
         self.active_provider_info = {}
 
         if not self.providers:
             raise RuntimeError(
                 "No LLM providers are configured in the failover chain. "
-                "Please set GROQ_API_KEY or GEMINI_API_KEY in the environment."
+                "Please set GROQ_API_KEY, GEMINI_API_KEY, or OPENROUTER_API_KEY in the environment."
             )
 
-        for provider_client in self.providers:
+        in_tokens = estimate_tokens(prompt)
+        out_tokens = max_tokens if max_tokens is not None else 1300
+        tot_est_tokens = in_tokens + out_tokens
+        is_large = tot_est_tokens > GROQ_SAFE_REQUEST_TOKEN_BUDGET
+
+        ordered_providers = self._get_ordered_providers(workload, is_large)
+
+        for provider_client in ordered_providers:
             provider_name = provider_client.__class__.__name__
             model_name = getattr(provider_client, "model_name", "unknown")
-            start_time = time.time()
 
+            healthy, health_reason = self.health_tracker.is_healthy(provider_client, prompt, max_tokens)
+            if not healthy:
+                print(f"[LLM Failover Trace] Skipping {provider_name} ({model_name}): {health_reason}")
+                self.last_execution_trace.append({
+                    "provider": provider_name,
+                    "model": model_name,
+                    "status": "skipped",
+                    "reason": health_reason
+                })
+                continue
+
+            start_time = time.time()
             try:
-                raw_out = provider_client.generate(prompt)
+                raw_out = provider_client.generate(prompt, max_tokens=max_tokens, workload=workload)
                 latency_ms = round((time.time() - start_time) * 1000, 2)
 
                 if not raw_out or not raw_out.strip():
                     raise RuntimeError("Provider returned empty string output.")
 
-                # Try parsing JSON output
-                try:
-                    parsed = _parse_json_from_llm(raw_out)
-                    if isinstance(parsed, dict):
-                        self.last_execution_trace.append({
-                            "provider": provider_name,
-                            "model": model_name,
-                            "status": "success",
-                            "latency_ms": latency_ms
-                        })
-                        self.active_provider_info = {
-                            "provider": provider_name,
-                            "model": model_name
-                        }
-                        return raw_out
-                    else:
-                        raise ValueError("Output is not a valid JSON dictionary.")
-                except Exception as json_err:
-                    raise RuntimeError(f"Output failed structured JSON validation: {json_err}")
+                # Conditionally validate JSON for structured JSON workloads or explicit JSON requests
+                is_json_workload = (
+                    workload in (Workload.CITIZEN_FIR_ANALYSIS, Workload.POLICE_FIR_DRAFT)
+                    or "json" in prompt.lower()
+                )
+                if is_json_workload:
+                    try:
+                        parsed = _parse_json_from_llm(raw_out)
+                        if not isinstance(parsed, dict):
+                            raise ValueError("Output is not a valid JSON dictionary.")
+                    except Exception as json_err:
+                        raise RuntimeError(f"Output failed structured JSON validation: {json_err}")
+
+                self.health_tracker.record_success(provider_client)
+                self.last_execution_trace.append({
+                    "provider": provider_name,
+                    "model": model_name,
+                    "status": "success",
+                    "latency_ms": latency_ms
+                })
+                self.active_provider_info = {
+                    "provider": provider_name,
+                    "model": model_name
+                }
+                return raw_out
 
             except Exception as err:
                 latency_ms = round((time.time() - start_time) * 1000, 2)
                 err_msg = str(err)
-                print(f"[LLM Failover Trace] {provider_name} ({model_name}) failed in {latency_ms}ms: {err_msg}")
+                error_category = _classify_llm_error(err_msg)
+                self.health_tracker.record_failure(provider_client, err_msg)
+                print(f"[LLM Failover Trace] {provider_name} ({model_name}) failed [{error_category}] in {latency_ms}ms: {err_msg}")
                 self.last_execution_trace.append({
                     "provider": provider_name,
                     "model": model_name,
                     "status": "failed",
+                    "error_category": error_category,
                     "error": err_msg,
                     "latency_ms": latency_ms
                 })
@@ -433,26 +818,52 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any]) -> str:
     raw_context = legal_context_obj.get("legal_context", [])
 
     formatted_context_groups = []
+    seen_doc_ids = set()
+    seen_section_defs = set()
+
     for group in raw_context:
         offence_type = group.get("offence_type", "")
         query = group.get("query", "")
         formatted_docs = []
         for doc in group.get("results", []):
-            formatted_docs.append({
-                "rank": doc.get("rank"),
-                "id": doc.get("id"),
-                "section": doc.get("section"),
-                "clause": doc.get("clause"),
-                "title": doc.get("title"),
-                "target_clause_text": doc.get("target_clause_text", doc.get("text", "")),
-                "section_definition": doc.get("section_definition", ""),
-                "schedule_1": doc.get("schedule_1", {})
-            })
-        formatted_context_groups.append({
-            "offence_type": offence_type,
-            "query": query,
-            "results": formatted_docs
-        })
+            doc_id = doc.get("id") or doc.get("document_id") or ""
+            if doc_id in seen_doc_ids:
+                continue
+            seen_doc_ids.add(doc_id)
+
+            target_text = doc.get("target_clause_text") or doc.get("text", "")
+            sec_def = doc.get("section_definition", "")
+            sec_num = str(doc.get("section", "")).strip()
+
+            compact_doc = {
+                "id": doc_id,
+                "section": doc.get("section", ""),
+                "clause": doc.get("clause", ""),
+                "title": doc.get("title", ""),
+                "target_clause_text": target_text
+            }
+
+            if sec_def and sec_def.strip() != target_text.strip():
+                if not sec_num or sec_num not in seen_section_defs:
+                    compact_doc["section_definition"] = sec_def
+                    if sec_num:
+                        seen_section_defs.add(sec_num)
+
+            sched_1 = doc.get("schedule_1", {})
+            if isinstance(sched_1, dict):
+                sched_offence = sched_1.get("offence", "")
+                if sched_offence and sched_offence.strip():
+                    compact_doc["schedule_1_offence"] = sched_offence.strip()
+
+            formatted_docs.append(compact_doc)
+
+        if formatted_docs:
+            group_entry = {"results": formatted_docs}
+            if offence_type and offence_type != "reranked_candidates":
+                group_entry["offence_type"] = offence_type
+            if query:
+                group_entry["query"] = query
+            formatted_context_groups.append(group_entry)
 
     prompt = (
         "You are an expert legal analysis system for Indian criminal law (Bharatiya Nyaya Sanhita - BNS 2023).\n"
@@ -561,14 +972,19 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any]) -> str:
         "INCIDENT FACTS:\n"
         f"{json.dumps(incident, indent=2)}\n\n"
         "RETRIEVED BNS LEGAL CONTEXT:\n"
-        f"{json.dumps(formatted_context_groups, indent=2)}\n"
+        f"{json.dumps(formatted_context_groups, indent=2)}\n\n"
+        "FINAL OUTPUT REQUIREMENT:\n"
+        "Return ONLY a valid JSON object matching the JSON OUTPUT SCHEMA FORMAT. "
+        "Your response MUST start directly with '{' and contain no preamble, conversational text, or markdown code blocks."
     )
     return prompt
 
 
 def _parse_json_from_llm(raw_text: str) -> Dict[str, Any]:
-    """Clean markdown formatting and parse JSON from raw LLM output."""
-    cleaned = raw_text.strip()
+    """Clean markdown formatting, extract JSON object boundaries, and parse JSON from raw LLM output."""
+    if not raw_text or not str(raw_text).strip():
+        raise ValueError("Raw LLM output is empty.")
+    cleaned = str(raw_text).strip()
     if cleaned.startswith("```json"):
         cleaned = cleaned[7:]
     if cleaned.startswith("```"):
@@ -576,6 +992,11 @@ def _parse_json_from_llm(raw_text: str) -> Dict[str, Any]:
     if cleaned.endswith("```"):
         cleaned = cleaned[:-3]
     cleaned = cleaned.strip()
+
+    start_idx = cleaned.find("{")
+    end_idx = cleaned.rfind("}")
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        cleaned = cleaned[start_idx:end_idx + 1]
 
     return json.loads(cleaned)
 
@@ -788,7 +1209,7 @@ def analyze_incident(ner_result: Dict[str, Any], retrieval_result: Dict[str, Any
 
     # Attempt 1
     try:
-        raw_output = llm_client.generate(prompt)
+        raw_output = llm_client.generate(prompt, max_tokens=1300, workload=Workload.CITIZEN_FIR_ANALYSIS)
         parsed_json = _parse_json_from_llm(raw_output)
     except Exception as err1:
         parse_error = str(err1)
@@ -804,7 +1225,7 @@ def analyze_incident(ner_result: Dict[str, Any], retrieval_result: Dict[str, Any
             "Return ONLY corrected, strict, valid JSON matching the schema. Do NOT include any markdown code blocks or text outside the JSON."
         )
         try:
-            raw_output = llm_client.generate(retry_prompt)
+            raw_output = llm_client.generate(retry_prompt, max_tokens=1300, workload=Workload.CITIZEN_FIR_ANALYSIS)
             parsed_json = _parse_json_from_llm(raw_output)
         except Exception as err2:
             parse_error = str(err2)

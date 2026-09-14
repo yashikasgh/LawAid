@@ -65,7 +65,7 @@ QUERY_GENERATOR_SCHEMA = {
 class OllamaQueryGeneratorLLMClient(OllamaLLMClient):
     """Subclass of OllamaLLMClient applying QUERY_GENERATOR_SCHEMA for structured query generation."""
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, max_tokens: Optional[int] = None) -> str:
         if not self.model_name:
             raise RuntimeError(
                 "No generative LLM model configured. Please set OLLAMA_LLM_MODEL environment variable "
@@ -78,11 +78,14 @@ class OllamaQueryGeneratorLLMClient(OllamaLLMClient):
         import ollama
 
         try:
+            opts = {"temperature": 0}
+            if max_tokens is not None:
+                opts["num_predict"] = max_tokens
             response = ollama.chat(
                 model=self.model_name,
                 messages=[{"role": "user", "content": prompt}],
                 format=QUERY_GENERATOR_SCHEMA,
-                options={"temperature": 0},
+                options=opts,
             )
             return response.get("message", {}).get("content", "")
         except Exception as e:
@@ -466,7 +469,7 @@ def generate_queries(
             )
 
         prompt = construct_query_generator_prompt(ner_result)
-        raw_output = llm_client.generate(prompt)
+        raw_output = llm_client.generate(prompt, max_tokens=250)
 
         parsed_json = _parse_json_from_llm(raw_output)
         valid_queries = validate_llm_queries(parsed_json, ner_result)

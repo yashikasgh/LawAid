@@ -18,7 +18,7 @@ ANALYSIS_DIR = PROJECT_ROOT / "ai" / "rag" / "analysis"
 if str(ANALYSIS_DIR) not in sys.path:
     sys.path.insert(0, str(ANALYSIS_DIR))
 
-from ai.rag.analysis.legal_analyzer import GroqLLMClient, MultiProviderLLMFailoverClient, LLMClient
+from ai.rag.analysis.legal_analyzer import GroqLLMClient, MultiProviderLLMFailoverClient, LLMClient, Workload
 
 
 STRUCTURED_FIR_SCHEMA = {
@@ -259,7 +259,7 @@ def generate_structured_fir(
 
     fir_data = {}
     try:
-        raw_out = llm_client.generate(prompt)
+        raw_out = llm_client.generate(prompt, max_tokens=700, workload=Workload.POLICE_FIR_DRAFT)
         cleaned = raw_out.strip()
         if cleaned.startswith("```json"):
             cleaned = cleaned[7:]
