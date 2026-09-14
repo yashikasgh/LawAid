@@ -18,13 +18,29 @@ export default function Navbar() {
 
   const role = user?.role?.toLowerCase()
 
-  const links = [
-    { href: '/', label: 'Home' },
-    { href: '/bns-search', label: 'BNS Search' },
-    { href: '/citizen', label: 'Citizen' },
-    { href: '/police', label: 'Police' },
-    { href: '/lawyer', label: 'Lawyer' },
-  ]
+  const links =
+  role === 'citizen'
+    ? [
+        { href: '/', label: 'Home' },
+        { href: '/citizen', label: 'Citizen' },
+        { href: '/citizen/understand', label: 'My FIRs' },
+        { href: '/citizen/chat', label: 'Legal Assistant' },
+        { href: '/bns-search', label: 'BNS Search' },
+      ]
+    : role === 'police'
+      ? [
+          { href: '/', label: 'Home' },
+          { href: '/police', label: 'Police' },
+          { href: '/police/new-fir', label: 'Draft FIR' },
+          { href: '/bns-search', label: 'BNS Search' },
+        ]
+      : [
+          { href: '/', label: 'Home' },
+          { href: '/bns-search', label: 'BNS Search' },
+          { href: '/citizen', label: 'Citizen' },
+          { href: '/police', label: 'Police' },
+          { href: '/lawyer', label: 'Lawyer' },
+        ]
 
   async function handleLogout() {
     await logout()
