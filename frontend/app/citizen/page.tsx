@@ -15,12 +15,6 @@ export default function CitizenDashboard() {
 
   const cards = [
     {
-      icon: <ComplaintIcon />,
-      title: 'File a Complaint',
-      desc: 'Describe your incident and find relevant BNS sections.',
-      href: '/citizen/complaint',
-    },
-    {
       icon: <FIRIcon />,
       title: 'Understand FIR',
       desc: 'Upload an FIR and get a plain-language explanation.',
@@ -212,43 +206,6 @@ function HelpStep({
       </div>
 
     </div>
-  )
-}
-
-function ComplaintIcon() {
-  return (
-    <svg
-      width="38"
-      height="38"
-      viewBox="0 0 38 38"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path
-        d="M9 4.5H24L29 9.5V33.5H9V4.5Z"
-        stroke="#B98528"
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M24 4.5V10H29"
-        stroke="#B98528"
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M13 15H24M13 19.5H21"
-        stroke="#12335B"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-      />
-      <path
-        d="M21.5 25.5L27.5 19.5L30 22L24 28L20.5 29L21.5 25.5Z"
-        stroke="#B98528"
-        strokeWidth="1.7"
-        strokeLinejoin="round"
-      />
-    </svg>
   )
 }
 
