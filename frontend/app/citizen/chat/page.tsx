@@ -1,8 +1,8 @@
 // app/citizen/chat/page.tsx
 'use client'
+
 import { useState, useEffect, useRef } from 'react'
 import Navbar from '@/components/Navbar'
-import CitizenSidebar from '@/components/CitizenSidebar'
 import { chatAPI } from '@/lib/api'
 
 type Message = {
@@ -17,6 +17,33 @@ const QUICK_QUESTIONS = [
   "What is a 'Zero FIR' and where can I file it?",
 ]
 
+const PREVIOUS_CONVERSATIONS = [
+  {
+    id: 1,
+    title: 'Rights when police refuse FIR',
+  },
+  {
+    id: 2,
+    title: 'Online cheating and cyber fraud',
+  },
+  {
+    id: 3,
+    title: 'Criminal intimidation and bail',
+  },
+  {
+    id: 4,
+    title: 'Understanding Zero FIR',
+  },
+  {
+    id: 5,
+    title: 'BNS Section 318',
+  },
+  {
+    id: 6,
+    title: 'FIR filing procedure',
+  },
+]
+
 export default function CitizenChatPage() {
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -28,159 +55,30 @@ export default function CitizenChatPage() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [sessionId, setSessionId] = useState('')
-  const [isListening, setIsListening] = useState(false)
-  const [speechSupported, setSpeechSupported] = useState(false)
-  const [speechNotice, setSpeechNotice] = useState('')
+  const [activeConversation, setActiveConversation] = useState(1)
 
   const chatEndRef = useRef<HTMLDivElement>(null)
-  const recognitionRef = useRef<any>(null)
-
-  const baseTextRef = useRef<string>('')
-  const hasCapturedSpeechRef = useRef<boolean>(false)
 
   useEffect(() => {
     // Generate or restore session ID
     let sid = sessionStorage.getItem('lawaid_chat_session')
+
     if (!sid) {
       sid = 'session_' + Math.random().toString(36).substring(2, 9)
       sessionStorage.setItem('lawaid_chat_session', sid)
     }
-    setSessionId(sid)
 
-    // Check Speech Recognition browser support
-    if (typeof window !== 'undefined') {
-      const SpeechRecognition =
-        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-      if (SpeechRecognition) {
-        setSpeechSupported(true)
-      }
-    }
+    setSessionId(sid)
   }, [])
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  function handleToggleSpeech() {
-    if (typeof window === 'undefined') return
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-
-    if (!SpeechRecognition) {
-      setSpeechNotice('Voice input is not supported in this browser.')
-      setTimeout(() => setSpeechNotice(''), 4000)
-      return
-    }
-
-    if (isListening) {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop()
-        } catch {
-          // ignore error if already stopped
-        }
-      }
-      setIsListening(false)
-      return
-    }
-
-    // Save existing typed text as base and reset captured speech flag before starting recognition
-    baseTextRef.current = input.trim()
-    hasCapturedSpeechRef.current = false
-
-    try {
-      const recognition = new SpeechRecognition()
-      recognition.continuous = true
-      recognition.interimResults = true
-      recognition.lang = 'en-IN'
-
-      recognition.onstart = () => {
-        setIsListening(true)
-        setSpeechNotice('')
-      }
-
-      recognition.onresult = (event: any) => {
-        let finalTranscript = ''
-        let interimTranscript = ''
-
-        for (let i = 0; i < event.results.length; i++) {
-          const result = event.results[i]
-          const text = result[0].transcript
-          if (result.isFinal) {
-            finalTranscript += text + ' '
-          } else {
-            interimTranscript += text
-          }
-        }
-
-        const base = baseTextRef.current
-        const finalPart = finalTranscript.trim()
-        const interimPart = interimTranscript.trim()
-
-        if (finalPart || interimPart) {
-          hasCapturedSpeechRef.current = true
-        }
-
-        let combined = base
-        if (finalPart) {
-          combined = combined ? `${combined} ${finalPart}` : finalPart
-        }
-        if (interimPart) {
-          combined = combined ? `${combined} ${interimPart}` : interimPart
-        }
-
-        setInput(combined)
-      }
-
-      recognition.onerror = (event: any) => {
-        console.warn('Speech recognition error event:', event.error)
-        setIsListening(false)
-
-        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-          setSpeechNotice('Microphone permission was denied. Please allow microphone access in your browser.')
-          setTimeout(() => setSpeechNotice(''), 5000)
-        } else if (event.error === 'no-speech' || event.error === 'aborted') {
-          // Normal timeout or manual stop - silently finish without error banner
-        } else if (event.error === 'network') {
-          // If speech was successfully captured, network stream closing is normal - suppress misleading error notice!
-          if (!hasCapturedSpeechRef.current) {
-            setSpeechNotice('Speech recognition network service unavailable.')
-            setTimeout(() => setSpeechNotice(''), 4000)
-          }
-        } else {
-          // Only show notice for other errors if no speech was captured
-          if (!hasCapturedSpeechRef.current) {
-            setSpeechNotice(`Speech recognition notice: ${event.error || 'Stopped.'}`)
-            setTimeout(() => setSpeechNotice(''), 4000)
-          }
-        }
-      }
-
-      recognition.onend = () => {
-        setIsListening(false)
-      }
-
-      recognitionRef.current = recognition
-      recognition.start()
-    } catch (err) {
-      console.error('Failed to start speech recognition:', err)
-      setIsListening(false)
-      setSpeechNotice('Failed to start voice input.')
-      setTimeout(() => setSpeechNotice(''), 4000)
-    }
-  }
-
   async function handleSend(textToSend?: string) {
     const query = (textToSend || input).trim()
-    if (!query || loading) return
 
-    // Stop active speech recognition if user clicks send while recording
-    if (isListening && recognitionRef.current) {
-      try {
-        recognitionRef.current.stop()
-      } catch {}
-      setIsListening(false)
-    }
+    if (!query || loading) return
 
     setInput('')
     setMessages(prev => [...prev, { role: 'user', content: query }])
@@ -188,14 +86,22 @@ export default function CitizenChatPage() {
 
     try {
       const res = await chatAPI.sendMessage(sessionId, query)
-      const botReply = res.data.reply || 'I received your query but could not retrieve specific sections.'
-      setMessages(prev => [...prev, { role: 'assistant', content: botReply }])
+
+      const botReply =
+        res.data.reply ||
+        'I received your query but could not retrieve specific sections.'
+
+      setMessages(prev => [
+        ...prev,
+        { role: 'assistant', content: botReply },
+      ])
     } catch {
       setMessages(prev => [
         ...prev,
         {
           role: 'assistant',
-          content: 'Sorry, I am unable to connect to the legal knowledge server right now. Please ensure the backend is running.',
+          content:
+            'Sorry, I am unable to connect to the legal knowledge server right now. Please ensure the backend is running.',
         },
       ])
     } finally {
@@ -204,141 +110,229 @@ export default function CitizenChatPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col">
+    <div className="min-h-screen text-[#12335B]">
       <Navbar />
-      <div className="flex flex-1">
-        <CitizenSidebar />
-        <main className="flex-1 p-6 max-w-5xl flex flex-col h-[calc(100vh-64px)]">
-          <div className="mb-4">
-            <h1 className="text-2xl font-bold text-navy">Legal Assistant Chat</h1>
-            <p className="text-xs text-gray-500">
-              Interactive guidance grounded in the Bharatiya Nyaya Sanhita (BNS) 2023.
-            </p>
-          </div>
 
-          {/* Quick prompts */}
-          <div className="flex gap-2 overflow-x-auto pb-2 mb-3 scrollbar-none">
-            {QUICK_QUESTIONS.map((q, idx) => (
+      <main className="relative min-h-[calc(100vh-64px)] overflow-hidden">
+
+        {/* Background */}
+        <div className="fixed inset-0 -z-10">
+          <img
+            src="/images/lawaid-feature-bg.png"
+            alt="LawAid legal background"
+            className="h-full w-full object-cover object-center"
+          />
+        </div>
+
+        {/* Light overlay */}
+        <div className="fixed inset-0 -z-10 bg-[#f8f6f1]/10" />
+
+        <div className="flex min-h-[calc(100vh-64px)]">
+
+          {/* =========================
+              CONVERSATION SIDEBAR
+          ========================== */}
+          <aside className="w-64 shrink-0 bg-[#12335B]/95 text-white flex flex-col border-r border-white/10 backdrop-blur-md">
+
+            {/* New Chat */}
+            <div className="p-4 border-b border-white/10">
               <button
-                key={idx}
-                onClick={() => handleSend(q)}
-                className="text-xs bg-white border border-gray-200 hover:border-lawblue hover:bg-lblue text-gray-700 px-3 py-1.5 rounded-full whitespace-nowrap transition shrink-0 shadow-sm focus:outline-none focus:ring-2 focus:ring-lawblue"
+                type="button"
+                className="w-full flex items-center justify-center gap-2 rounded-full border border-[#d2a14b]/60 bg-[#b98528] px-4 py-3 text-sm font-semibold text-white hover:bg-[#9f7020] transition"
               >
-                💡 {q}
-              </button>
-            ))}
-          </div>
-
-          {/* Chat message box */}
-          <div className="flex-1 bg-white rounded-2xl p-4 shadow-sm border border-gray-100 overflow-y-auto space-y-4 mb-4">
-            {messages.map((m, i) => (
-              <div
-                key={i}
-                className={`flex gap-3 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                {m.role === 'assistant' && (
-                  <div className="w-8 h-8 rounded-full bg-lawblue text-white flex items-center justify-center font-bold text-xs shrink-0">
-                    ⚖
-                  </div>
-                )}
-                <div
-                  className={`max-w-2xl px-4 py-3 rounded-2xl text-xs leading-relaxed ${
-                    m.role === 'user'
-                      ? 'bg-navy text-white rounded-br-none'
-                      : 'bg-gray-50 text-gray-800 border border-gray-100 rounded-bl-none whitespace-pre-line'
-                  }`}
-                >
-                  {m.content}
-                </div>
-                {m.role === 'user' && (
-                  <div className="w-8 h-8 rounded-full bg-gray-200 text-gray-700 flex items-center justify-center font-bold text-xs shrink-0">
-                    👤
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {loading && (
-              <div className="flex gap-3 items-center">
-                <div className="w-8 h-8 rounded-full bg-lawblue text-white flex items-center justify-center font-bold text-xs">
-                  ⚖
-                </div>
-                <div className="bg-gray-50 border border-gray-100 px-4 py-3 rounded-2xl text-xs text-gray-500 italic animate-pulse">
-                  Consulting BNS legal corpus & drafting guidance...
-                </div>
-              </div>
-            )}
-            <div ref={chatEndRef} />
-          </div>
-
-          {/* Speech notice notification banner if present */}
-          {speechNotice && (
-            <div className="text-xs text-amber-800 bg-amber-50 px-3 py-2 rounded-xl border border-amber-200 mb-2 flex items-center justify-between shadow-sm">
-              <span>⚠️ {speechNotice}</span>
-              <button
-                onClick={() => setSpeechNotice('')}
-                className="text-amber-600 hover:text-amber-900 font-bold text-xs px-1"
-                title="Dismiss"
-              >
-                ✕
+                <span className="text-lg leading-none">+</span>
+                New Chat
               </button>
             </div>
-          )}
 
-          {/* Chat input box */}
-          <div className="bg-white rounded-2xl p-2 shadow-sm border border-gray-200 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleToggleSpeech}
-              disabled={loading}
-              aria-label={isListening ? 'Stop voice input' : 'Start voice input'}
-              title={
-                !speechSupported
-                  ? 'Voice input is not supported in this browser'
-                  : isListening
-                  ? 'Click to stop listening'
-                  : 'Click to speak your legal question'
-              }
-              className={`p-2 sm:px-3 sm:py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 focus:outline-none focus:ring-2 focus:ring-lawblue ${
-                isListening
-                  ? 'bg-rose-500 text-white animate-pulse shadow-md shadow-rose-200'
-                  : speechSupported
-                  ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  : 'bg-gray-100 text-gray-400 cursor-not-allowed opacity-60'
-              }`}
-            >
-              <span className="text-sm">{isListening ? '🛑' : '🎙️'}</span>
-              <span className="hidden sm:inline">
-                {isListening ? 'Listening...' : 'Voice'}
-              </span>
-            </button>
+            {/* Conversation heading */}
+            <div className="px-5 pt-6 pb-3">
+              <div className="flex items-center gap-3">
+                <span className="h-px w-8 bg-[#b98528]" />
 
-            <input
-              type="text"
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleSend()}
-              placeholder={
-                isListening
-                  ? 'Listening to your speech... Speak now or edit below.'
-                  : "Ask a legal question or describe a situation (e.g. 'Is bail available for Section 318?')..."
-              }
-              className={`flex-1 px-3 py-2 text-xs outline-none text-gray-800 rounded-lg transition-colors ${
-                isListening ? 'bg-rose-50/50 placeholder-rose-400' : ''
-              }`}
-              disabled={loading}
-            />
+                <p className="text-[10px] uppercase tracking-[0.25em] text-white/60 font-semibold">
+                  Previous Conversations
+                </p>
+              </div>
+            </div>
 
-            <button
-              onClick={() => handleSend()}
-              disabled={loading || !input.trim()}
-              className="bg-lawblue text-white px-4 sm:px-5 py-2 rounded-xl text-xs font-bold hover:bg-navy transition disabled:opacity-50 shrink-0 focus:outline-none focus:ring-2 focus:ring-lawblue"
-            >
-              Send →
-            </button>
-          </div>
-        </main>
-      </div>
+            {/* Conversation list */}
+            <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-1">
+
+              {PREVIOUS_CONVERSATIONS.map((conversation) => (
+                <button
+                  key={conversation.id}
+                  type="button"
+                  onClick={() =>
+                    setActiveConversation(conversation.id)
+                  }
+                  className={`w-full text-left px-3 py-3 rounded-xl text-sm transition ${
+                    activeConversation === conversation.id
+                      ? 'bg-white/15 text-white shadow-sm'
+                      : 'text-white/70 hover:bg-white/10 hover:text-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+
+                    <span
+                      className={`text-sm shrink-0 ${
+                        activeConversation === conversation.id
+                          ? 'text-[#d2a14b]'
+                          : 'text-white/45'
+                      }`}
+                    >
+                      💬
+                    </span>
+
+                    <span className="truncate">
+                      {conversation.title}
+                    </span>
+
+                  </div>
+                </button>
+              ))}
+
+            </div>
+
+            {/* Sidebar footer */}
+            <div className="border-t border-white/10 p-4">
+              <p className="text-[11px] text-white/40 leading-relaxed">
+                Your conversations will appear here.
+              </p>
+            </div>
+
+          </aside>
+
+          {/* =========================
+              MAIN CHAT
+          ========================== */}
+          <section className="flex-1 min-w-0">
+
+            <main className="max-w-6xl mx-auto px-6 sm:px-8 py-10 flex flex-col h-[calc(100vh-64px)] min-h-0">
+
+              {/* Header */}
+              <div className="mb-6">
+
+                <div className="flex items-center gap-3 mb-4">
+                  <span className="h-px w-10 bg-[#b98528]" />
+
+                  <span className="text-[11px] tracking-[0.3em] uppercase text-white font-medium">
+                    LEGAL ASSISTANCE
+                  </span>
+                </div>
+
+                <h1 className="font-serif text-4xl md:text-5xl font-semibold text-[#cc8427] tracking-[-0.025em]">
+                  Legal Assistant
+                </h1>
+
+                <p className="mt-3 text-[#dca45a] text-sm md:text-base">
+                  Interactive guidance grounded in the Bharatiya Nyaya Sanhita
+                  (BNS) 2023.
+                </p>
+
+              </div>
+
+              {/* Quick prompts */}
+              <div className="flex gap-2 overflow-x-auto pb-3 mb-3 scrollbar-none">
+
+                {QUICK_QUESTIONS.map((q, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => handleSend(q)}
+                    className="text-xs bg-white/80 border border-[#d9d4ca] hover:border-[#b98528] hover:bg-white text-[#315b82] px-4 py-2 rounded-full whitespace-nowrap transition shrink-0 shadow-sm backdrop-blur-sm"
+                  >
+                    💡 {q}
+                  </button>
+                ))}
+
+              </div>
+
+              {/* Chat message box */}
+              <div className="flex-1 bg-white/80 backdrop-blur-md rounded-[20px] p-5 shadow-[0_15px_40px_rgba(18,51,91,0.12)] border border-white/70 overflow-y-auto space-y-5 mb-4 min-h-0">
+
+                {messages.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`flex gap-3 ${
+                      m.role === 'user'
+                        ? 'justify-end'
+                        : 'justify-start'
+                    }`}
+                  >
+
+                    {m.role === 'assistant' && (
+                      <div className="w-9 h-9 rounded-full bg-[#12335B] text-[#d2a14b] flex items-center justify-center font-bold text-xs shrink-0 border border-[#b98528]/60">
+                        ⚖
+                      </div>
+                    )}
+
+                    <div
+                      className={`max-w-2xl px-5 py-3.5 rounded-[16px] text-sm leading-relaxed ${
+                        m.role === 'user'
+                          ? 'bg-[#12335B] text-white rounded-br-none'
+                          : 'bg-[#f8f6f1]/90 text-[#315b82] border border-[#d9d4ca] rounded-bl-none whitespace-pre-line'
+                      }`}
+                    >
+                      {m.content}
+                    </div>
+
+                    {m.role === 'user' && (
+                      <div className="w-9 h-9 rounded-full bg-[#e8e4dc] text-[#12335B] flex items-center justify-center font-bold text-xs shrink-0 border border-[#d9d4ca]">
+                        👤
+                      </div>
+                    )}
+
+                  </div>
+                ))}
+
+                {loading && (
+                  <div className="flex gap-3 items-center">
+
+                    <div className="w-9 h-9 rounded-full bg-[#12335B] text-[#d2a14b] flex items-center justify-center font-bold text-xs border border-[#b98528]/60">
+                      ⚖
+                    </div>
+
+                    <div className="bg-[#f8f6f1]/90 border border-[#d9d4ca] px-5 py-3.5 rounded-[16px] text-sm text-[#7890a8] italic animate-pulse">
+                      Consulting BNS legal corpus & drafting guidance...
+                    </div>
+
+                  </div>
+                )}
+
+                <div ref={chatEndRef} />
+
+              </div>
+
+              {/* Chat input box */}
+              <div className="bg-white/85 backdrop-blur-md rounded-[18px] p-2 shadow-[0_15px_40px_rgba(18,51,91,0.10)] border border-white/70 flex gap-2">
+
+                <input
+                  type="text"
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={e =>
+                    e.key === 'Enter' && handleSend()
+                  }
+                  placeholder="Ask a legal question or describe a situation (e.g. 'Is bail available for Section 318?')..."
+                  className="flex-1 px-4 py-3 text-sm outline-none text-[#315b82] bg-transparent placeholder:text-[#7890a8]"
+                  disabled={loading}
+                />
+
+                <button
+                  onClick={() => handleSend()}
+                  disabled={loading || !input.trim()}
+                  className="bg-[#b98528] text-white px-6 py-3 rounded-[14px] text-sm font-semibold hover:bg-[#9f7020] transition disabled:opacity-50"
+                >
+                  Send →
+                </button>
+
+              </div>
+
+            </main>
+
+          </section>
+        </div>
+      </main>
     </div>
   )
 }
