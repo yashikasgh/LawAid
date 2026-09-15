@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str | None = None
     GROQ_MODEL: str | None = None
 
+    OPENROUTER_API_KEY: str | None = None
+    OPENROUTER_MODEL: str | None = None
+
     model_config = SettingsConfigDict(env_file=REPOSITORY_ROOT / ".env", extra="ignore")
 
 settings = Settings()

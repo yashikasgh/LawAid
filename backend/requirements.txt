@@ -10,5 +10,6 @@ pymongo==4.17.0
 pytest==9.1.1
 python-jose==3.5.0
 python-multipart==0.0.32
+rapidocr_onnxruntime>=1.2.0
 SQLAlchemy==2.0.51
 uvicorn==0.51.0

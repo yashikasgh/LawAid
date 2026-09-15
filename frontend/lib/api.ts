@@ -88,6 +88,12 @@ export const policeAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
+  extractStatement: (statement: string) =>
+    api.post('/police/extract-statement', { statement }),
+  generateFir: (incident: string) =>
+    api.post('/police/generate-fir', { incident }),
+  renderFirPdf: (fir_data: any) =>
+    api.post('/police/render-fir-pdf', { fir_data }),
   validateFir: (payload: unknown) => api.post('/police/validate-fir', payload),
   approveFir: (draftId: string) =>
     api.post('/police/approve-fir', { fir_draft_id: draftId }),

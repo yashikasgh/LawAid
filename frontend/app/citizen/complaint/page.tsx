@@ -60,7 +60,146 @@ export default function ComplaintPage() {
   }
 
   const results = pipelineData?.analysis || []
-  const currentStep = results.length > 0 ? 1 : 0
+  const supportedItems = results.filter(r => r.applicability === 'supported')
+  const uncertainItems = results.filter(r => r.applicability === 'uncertain' || (!r.applicability && r.similarity))
+  const notSupportedItems = results.filter(r => r.applicability === 'not_supported')
+  const visibleCount = supportedItems.length + uncertainItems.length
+  const currentStep = visibleCount > 0 ? 1 : 0
+
+  function formatMetaVal(val?: string): string | null {
+    if (!val) return null
+    const clean = val.trim()
+    if (
+      clean === 'not_available_in_retrieved_context' ||
+      clean.toLowerCase().startsWith('not available')
+    ) {
+      return 'Not available in retrieved source'
+    }
+    return clean
+  }
+
+  function isMetaAvailable(val?: string): boolean {
+    if (!val) return false
+    const clean = val.trim()
+    if (
+      clean === 'not_available_in_retrieved_context' ||
+      clean.toLowerCase().startsWith('not available')
+    ) {
+      return false
+    }
+    return true
+  }
+
+  function renderCard(r: AnalysisItem, idx: number, cardType: 'supported' | 'uncertain' | 'not_supported') {
+    const isSupp = cardType === 'supported'
+    const isUncert = cardType === 'uncertain'
+
+    const punText = formatMetaVal(r.punishment)
+    const courtText = formatMetaVal(r.court)
+
+    return (
+      <div
+        key={`${r.section}-${idx}`}
+        className={`border rounded-xl overflow-hidden shadow-sm transition ${
+          isSupp
+            ? 'border-emerald-200 bg-white'
+            : isUncert
+            ? 'border-amber-200 bg-amber-50/20'
+            : 'border-gray-200 bg-gray-50/50 opacity-90'
+        }`}
+      >
+        {/* Header row */}
+        <div className={`flex items-center px-4 py-2.5 gap-3 text-white ${
+          isSupp ? 'bg-navy' : isUncert ? 'bg-amber-700' : 'bg-slate-600'
+        }`}>
+          <span className="font-bold text-base">
+            §{r.section}{r.clause ? `(${r.clause})` : ''}
+          </span>
+          <span className="flex-1 font-semibold text-sm truncate">{r.title || r.offence_type}</span>
+          <span className={`text-xs px-2.5 py-0.5 rounded-full font-extrabold uppercase tracking-wide ${
+            isSupp
+              ? 'bg-emerald-500 text-white'
+              : isUncert
+              ? 'bg-amber-400 text-slate-900'
+              : 'bg-slate-400 text-white'
+          }`}>
+            {r.applicability ? r.applicability.replace('_', ' ') : 'UNCERTAIN'}
+          </span>
+        </div>
+
+        {/* Body */}
+        <div className="p-4 space-y-2.5 text-xs text-gray-700">
+          {/* Reasoning */}
+          {r.reasoning && (
+            <div>
+              <span className="font-semibold text-gray-900 block mb-0.5">
+                {isSupp
+                  ? 'Legal Assessment:'
+                  : isUncert
+                  ? 'Grounded Analysis (Uncertain / Insufficient Facts):'
+                  : 'Grounded Analysis (Not Supported):'}
+              </span>
+              <p className={`leading-relaxed p-2.5 rounded-lg border text-xs ${
+                isSupp
+                  ? 'bg-emerald-50/50 border-emerald-100 text-gray-800'
+                  : isUncert
+                  ? 'bg-amber-50/70 border-amber-100 text-gray-800'
+                  : 'bg-gray-100/70 border-gray-200 text-gray-600'
+              }`}>
+                {r.reasoning}
+              </p>
+            </div>
+          )}
+
+          {/* Punishment & Court */}
+          <div className="space-y-1 text-xs">
+            <p>
+              <strong className="text-gray-900">Punishment:</strong>{' '}
+              <span className={isMetaAvailable(r.punishment) ? 'text-gray-800' : 'text-gray-400 italic'}>
+                {punText || 'Not available in retrieved source'}
+              </span>
+            </p>
+
+            <p>
+              <strong className="text-gray-900">Jurisdiction / Court:</strong>{' '}
+              <span className={isMetaAvailable(r.court) ? 'text-gray-800' : 'text-gray-400 italic'}>
+                {courtText || 'Not available in retrieved source'}
+              </span>
+            </p>
+          </div>
+
+          {/* Classification badges */}
+          <div className="flex gap-2 flex-wrap pt-1">
+            {isMetaAvailable(r.bailable) ? (
+              <span className={`font-semibold px-2 py-0.5 rounded-full border ${
+                r.bailable!.toLowerCase().includes('non')
+                  ? 'bg-red-50 text-red-700 border-red-200'
+                  : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+              }`}>
+                {r.bailable}
+              </span>
+            ) : null}
+
+            {isMetaAvailable(r.cognizable) ? (
+              <span className={`font-semibold px-2 py-0.5 rounded-full border ${
+                r.cognizable!.toLowerCase().includes('non')
+                  ? 'bg-gray-50 text-gray-600 border-gray-200'
+                  : 'bg-blue-50 text-blue-700 border-blue-200'
+              }`}>
+                {r.cognizable}
+              </span>
+            ) : null}
+
+            {!isMetaAvailable(r.bailable) && !isMetaAvailable(r.cognizable) && (
+              <span className="text-[11px] text-gray-400 italic">
+                Schedule I classification: Not available in retrieved source
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -101,8 +240,9 @@ export default function ComplaintPage() {
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="font-bold text-navy">Legal Findings</h2>
                   {source === 'pipeline' && (
-                    <span className="text-xs bg-green-100 text-green-700 border border-green-300 px-2.5 py-0.5 rounded-full font-semibold">
-                      ✓ AI Grounded Analysis
+                    <span className="text-xs bg-emerald-50 text-emerald-800 border border-emerald-300 px-3 py-1 rounded-full font-semibold flex items-center gap-1.5" title="Analysis evaluated against retrieved BNS 2023 provisions">
+                      <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
+                      Grounded in BNS 2023 Source Material
                     </span>
                   )}
                   {source === 'retrieval_fallback' && (
@@ -125,88 +265,61 @@ export default function ComplaintPage() {
                 )}
                 {error && <p className="text-red-500 text-sm">{error}</p>}
 
-                {!loading && results.length === 0 && !error && (
-                  <p className="text-gray-500 text-sm">
-                    No matching provisions found. Try adding more concrete facts about what occurred.
-                  </p>
-                )}
-
-                {!loading && results.length > 0 && (
-                  <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
-                    {results.map((r, idx) => (
-                      <div key={`${r.section}-${idx}`} className="border border-gray-200 rounded-xl overflow-hidden bg-white shadow-sm">
-                        {/* Header row */}
-                        <div className="flex items-center bg-lawblue text-white px-4 py-2.5 gap-3">
-                          <span className="font-bold text-base">
-                            §{r.section}{r.clause ? `(${r.clause})` : ''}
-                          </span>
-                          <span className="flex-1 font-semibold text-sm truncate">{r.title || r.offence_type}</span>
-                          {r.applicability && (
-                            <span className={`text-xs px-2 py-0.5 rounded-full font-bold uppercase ${
-                              r.applicability === 'supported'
-                                ? 'bg-green-600 text-white'
-                                : r.applicability === 'uncertain'
-                                ? 'bg-amber-500 text-white'
-                                : 'bg-red-500 text-white'
-                            }`}>
-                              {r.applicability}
-                            </span>
-                          )}
+                {!loading && !error && (
+                  <div className="space-y-5 max-h-[75vh] overflow-y-auto pr-1">
+                    {/* 1. Service Unavailable Banner */}
+                    {pipelineData?.status === 'analysis_unavailable' && (
+                      <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs space-y-2">
+                        <div className="flex items-center gap-2 text-amber-900 font-bold text-sm">
+                          <svg className="w-5 h-5 text-amber-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                          </svg>
+                          <span>AI legal analysis is temporarily unavailable</span>
                         </div>
-
-                        {/* Body */}
-                        <div className="p-4 space-y-2.5 text-xs text-gray-700">
-                          {/* Reasoning */}
-                          {r.reasoning && (
-                            <div>
-                              <span className="font-semibold text-gray-900 block mb-0.5">Legal Assessment:</span>
-                              <p className="leading-relaxed bg-gray-50 p-2.5 rounded-lg border border-gray-100">
-                                {r.reasoning}
-                              </p>
-                            </div>
-                          )}
-
-                          {/* Punishment & Court */}
-                          {r.punishment && r.punishment !== 'not_available_in_retrieved_context' && (
-                            <p>
-                              <strong className="text-gray-900">Punishment:</strong> {r.punishment}
-                            </p>
-                          )}
-
-                          {r.court && r.court !== 'not_available_in_retrieved_context' && (
-                            <p>
-                              <strong className="text-gray-900">Jurisdiction / Court:</strong> {r.court}
-                            </p>
-                          )}
-
-                          {/* Classification badges */}
-                          <div className="flex gap-2 flex-wrap pt-1">
-                            {r.bailable && (
-                              <span className={`font-semibold px-2 py-0.5 rounded-full border ${
-                                r.bailable.toLowerCase().includes('non')
-                                  ? 'bg-red-50 text-red-700 border-red-200'
-                                  : 'bg-green-50 text-green-700 border-green-200'
-                              }`}>
-                                {r.bailable}
-                              </span>
-                            )}
-                            {r.cognizable && (
-                              <span className={`font-semibold px-2 py-0.5 rounded-full border ${
-                                r.cognizable.toLowerCase().includes('non')
-                                  ? 'bg-gray-50 text-gray-600 border-gray-200'
-                                  : 'bg-blue-50 text-blue-700 border-blue-200'
-                              }`}>
-                                {r.cognizable}
-                              </span>
-                            )}
-                          </div>
-                        </div>
+                        <p className="text-amber-800 leading-relaxed">
+                          {pipelineData.limitations?.[0] ||
+                            'The LawAid legal knowledge base was reached successfully, but the AI reasoning service is temporarily unavailable. Please try again shortly.'}
+                        </p>
                       </div>
-                    ))}
+                    )}
+
+                    {/* 2. Genuine No Results State (No Supported or Uncertain Provisions) */}
+                    {pipelineData?.status !== 'analysis_unavailable' && visibleCount === 0 && (
+                      <p className="text-gray-500 text-sm">
+                        No matching provisions found. Try adding more concrete facts about what occurred.
+                      </p>
+                    )}
+
+                    {/* 3. Evaluated Provisions (Supported & Uncertain) */}
+                    {visibleCount > 0 && (
+                      <>
+                        {/* Legally Supported Provisions */}
+                        {supportedItems.length > 0 && (
+                          <div className="space-y-3">
+                            <h3 className="text-xs font-extrabold uppercase tracking-wider text-emerald-800 flex items-center gap-1.5 border-b border-emerald-100 pb-1.5">
+                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-600"></span>
+                              Legally Supported Provisions ({supportedItems.length})
+                            </h3>
+                            {supportedItems.map((r, idx) => renderCard(r, idx, 'supported'))}
+                          </div>
+                        )}
+
+                        {/* Provisions Requiring Further Facts / Unstated Provisos */}
+                        {uncertainItems.length > 0 && (
+                          <div className="space-y-3">
+                            <h3 className="text-xs font-extrabold uppercase tracking-wider text-amber-800 flex items-center gap-1.5 border-b border-amber-100 pb-1.5">
+                              <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+                              Provisions Requiring Further Facts / Provisos ({uncertainItems.length})
+                            </h3>
+                            {uncertainItems.map((r, idx) => renderCard(r, idx, 'uncertain'))}
+                          </div>
+                        )}
+                      </>
+                    )}
 
                     {/* Disclaimer note */}
                     {pipelineData?.disclaimer && (
-                      <p className="text-[11px] text-gray-500 italic mt-2 border-t pt-2">
+                      <p className="text-[11px] text-gray-500 italic mt-3 border-t pt-2.5">
                         {pipelineData.disclaimer}
                       </p>
                     )}

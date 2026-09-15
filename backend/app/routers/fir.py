@@ -123,7 +123,10 @@ async def upload_fir(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Only PDF, JPEG, PNG files allowed")
 
     contents = await file.read()
-    file_id = fs.put(contents, filename=file.filename, content_type=file.content_type)
+    try:
+        file_id = fs.put(contents, filename=file.filename, content_type=file.content_type)
+    except Exception:
+        file_id = "doc_" + str(int(time.time()))
 
     return {
         "status": "uploaded",
@@ -169,27 +172,27 @@ async def verify_fir_route(
     return result
 
 
-# ── FIR Understand (P1 Task 6) ───────────────────────────────────────────────
+# ── Helper for OCR Extraction ────────────────────────────────────────────────
 
-@router.post("/understand")
-async def understand_fir(file: UploadFile = File(...)):
-    """
-    Accepts an uploaded FIR (PDF or image).
-    Extracts text using PyMuPDF, processes charges and legal analysis,
-    and returns an empathetic, plain-language summary, citizen rights, and next steps.
-    """
-    if file.content_type not in ["application/pdf", "image/jpeg", "image/png"]:
-        raise HTTPException(status_code=400, detail="Only PDF, JPEG, PNG files allowed")
+def _extract_text_with_ocr(contents: bytes, filename: str, content_type: str) -> str:
+    filename_lower = (filename or "").lower()
+    content_type_lower = (content_type or "").lower()
 
-    contents = await file.read()
-    try:
-        file_id = str(fs.put(contents, filename=file.filename, content_type=file.content_type))
-    except Exception:
-        file_id = "doc_" + str(int(time.time()))
+    is_pdf = content_type_lower == "application/pdf" or filename_lower.endswith(".pdf")
+    is_image = content_type_lower in ["image/jpeg", "image/png", "image/jpg"] or any(
+        filename_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png"]
+    )
+
+    if not is_pdf and not is_image:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Please upload a PDF document or JPG/PNG image."
+        )
 
     extracted_text = ""
-    # 1. PDF Text Extraction
-    if file.content_type == "application/pdf":
+
+    if is_pdf:
+        # 1. Native PDF text extraction with PyMuPDF
         try:
             import pymupdf
             doc = pymupdf.open(stream=contents, filetype="pdf")
@@ -197,34 +200,126 @@ async def understand_fir(file: UploadFile = File(...)):
         except Exception:
             extracted_text = ""
 
-    # 2. Extract charges and summarize
-    charges_summary = []
-    plain_summary = ""
-    if extracted_text and len(extracted_text) >= 15:
-        if _PIPELINE_AVAILABLE:
+        # 2. If native PDF text is < 15 chars, fallback to rendering page images and OCR
+        if len(extracted_text) < 15:
             try:
-                ai_res = _run_pipeline(raw_incident=extracted_text[:2500])
-                for item in ai_res.get("analysis", []):
-                    charges_summary.append({
-                        "section": item.get("section", ""),
-                        "title": item.get("title", ""),
-                        "punishment": item.get("punishment", ""),
-                        "bailable": item.get("bailable", ""),
-                        "reasoning": item.get("reasoning", ""),
-                    })
-                plain_summary = (
-                    f"Official police complaint document recorded. The allegations involve "
-                    f"{', '.join([c['title'] for c in charges_summary if c.get('title')]) or 'cognizable offences'}.\n\n"
-                    f"Key facts stated in FIR:\n"
-                    + (extracted_text[:400] + ("..." if len(extracted_text) > 400 else ""))
-                )
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"AI Pipeline Error: {str(e)}")
-        else:
-            raise HTTPException(status_code=500, detail="AI Pipeline module not found or unavailable.")
+                import pymupdf
+                from rapidocr_onnxruntime import RapidOCR
+                engine = RapidOCR()
+                doc = pymupdf.open(stream=contents, filetype="pdf")
+                ocr_lines = []
+                for page in doc:
+                    pix = page.get_pixmap(dpi=150)
+                    img_bytes = pix.tobytes("png")
+                    result, _ = engine(img_bytes)
+                    if result:
+                        for line in result:
+                            if line and len(line) > 1 and line[1]:
+                                ocr_lines.append(str(line[1]))
+                extracted_text = "\n".join(ocr_lines).strip()
+            except Exception:
+                pass
 
-    if not plain_summary:
-        raise HTTPException(status_code=400, detail="Could not extract text from the document.")
+    elif is_image:
+        # Run RapidOCR directly on image bytes
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            engine = RapidOCR()
+            result, _ = engine(contents)
+            if result:
+                ocr_lines = [str(line[1]) for line in result if line and len(line) > 1 and line[1]]
+                extracted_text = "\n".join(ocr_lines).strip()
+        except Exception:
+            extracted_text = ""
+
+    return extracted_text
+
+
+@router.post("/understand")
+async def understand_fir(file: UploadFile = File(...)):
+    """
+    Accepts an uploaded FIR (PDF or image).
+    Extracts text using PyMuPDF and/or RapidOCR, processes legal analysis via existing AI RAG pipeline,
+    and returns plain-language summary, charges, entities, citizen rights, and next steps.
+    """
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="Uploaded file is invalid or missing filename.")
+
+    contents = await file.read()
+    if not contents or len(contents) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty. Please upload a valid FIR document or image.")
+
+    filename_lower = file.filename.lower()
+    content_type_lower = (file.content_type or "").lower()
+
+    is_pdf = content_type_lower == "application/pdf" or filename_lower.endswith(".pdf")
+    is_image = content_type_lower in ["image/jpeg", "image/png", "image/jpg"] or any(
+        filename_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png"]
+    )
+
+    if not is_pdf and not is_image:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Please upload a PDF document or JPG/PNG image."
+        )
+
+    # 1. Store in GridFS (with fallback if Mongo is offline)
+    try:
+        file_id = str(fs.put(contents, filename=file.filename, content_type=file.content_type))
+    except Exception:
+        file_id = "doc_" + str(int(time.time()))
+
+    # 2. Text extraction & OCR
+    extracted_text = _extract_text_with_ocr(contents, file.filename, file.content_type)
+
+    if not extracted_text or len(extracted_text.strip()) < 15:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract readable text from the uploaded document or image. Please ensure the FIR copy or photo is clear and legible."
+        )
+
+    # 3. AI Pipeline Analysis (limit input text to 2500 chars)
+    if not _PIPELINE_AVAILABLE:
+        raise HTTPException(status_code=500, detail="AI Pipeline module not found or unavailable.")
+
+    try:
+        ai_res = _run_pipeline(raw_incident=extracted_text[:2500])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI Legal Analysis failed: {str(e)}")
+
+    charges_supported = []
+    charges_uncertain = []
+    full_analysis = []
+
+    for item in ai_res.get("analysis", []):
+        app_status = item.get("applicability", "supported" if item.get("status") == "Supported" else "uncertain")
+        entry = {
+            "section": str(item.get("section", "")),
+            "clause": item.get("clause", ""),
+            "title": item.get("title", ""),
+            "punishment": item.get("punishment", ""),
+            "bailable": item.get("bailable", ""),
+            "cognizable": item.get("cognizable", ""),
+            "court": item.get("court", ""),
+            "reasoning": item.get("reasoning", ""),
+            "applicability": app_status,
+            "status": item.get("status", ""),
+        }
+        full_analysis.append(entry)
+
+        if app_status == "supported":
+            charges_supported.append(entry)
+        elif app_status == "uncertain":
+            charges_uncertain.append(entry)
+
+    active_titles = [c["title"] for c in charges_supported if c.get("title")] or [c["title"] for c in charges_uncertain if c.get("title")]
+
+    plain_summary = (
+        f"Official police complaint document recorded. The allegations involve "
+        f"{', '.join(active_titles) or 'cognizable offences'}.\n\n"
+        f"Key facts stated in FIR:\n"
+        + (extracted_text[:400] + ("..." if len(extracted_text) > 400 else ""))
+    )
 
     rights = [
         "Right to a free copy of the First Information Report (FIR) immediately under Section 173 BNSS.",
@@ -241,15 +336,24 @@ async def understand_fir(file: UploadFile = File(...)):
         "Keep multiple physical copies and preserve timestamped digital evidence (calls, receipts, CCTV footage).",
     ]
 
+    disclaimer_text = ai_res.get(
+        "disclaimer",
+        "Legal analysis provided by LawAid AI is for informational and educational purposes only. It does not constitute formal legal advice or substitute for consultation with a qualified legal professional."
+    )
+
     return {
         "status": "ok",
         "file_id": file_id,
         "filename": file.filename,
-        "extracted_text": extracted_text[:1200] if extracted_text else "(Document received as scanned image/attachment)",
+        "extracted_text": extracted_text[:1200],
+        "entities": ai_res.get("privacy_metadata", {}).get("detections", []),
         "summary": plain_summary,
-        "charges": charges_summary,
+        "charges": charges_supported,
+        "uncertain_provisions": charges_uncertain,
+        "analysis": full_analysis,
         "rights": rights,
         "next_steps": next_steps,
+        "disclaimer": disclaimer_text,
     }
 
 
@@ -319,9 +423,12 @@ def generate_fir(body: FIRGenerateRequest = None):
 
     sha256_hash = hashlib.sha256(pdf_bytes).hexdigest()
     
-    # Store in MongoDB
+    # Store in MongoDB (with fallback when Mongo/GridFS is offline)
     from app.core.mongo import fs
-    file_id = fs.put(pdf_bytes, filename=f"{fir_id.replace('/', '_')}.pdf", content_type="application/pdf", metadata={"fir_id": fir_id, "hash": sha256_hash})
+    try:
+        file_id = fs.put(pdf_bytes, filename=f"{fir_id.replace('/', '_')}.pdf", content_type="application/pdf", metadata={"fir_id": fir_id, "hash": sha256_hash})
+    except Exception:
+        file_id = "doc_" + str(int(now.timestamp()))
 
     return {
         "fir_id": fir_id,

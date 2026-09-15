@@ -16,104 +16,156 @@ export default function PoliceDashboard() {
     <>
       <Navbar />
 
-      <main className="min-h-screen bg-gray-100 px-4 py-8">
-        <div className="max-w-6xl mx-auto">
+      <main className="relative min-h-screen overflow-hidden">
+
+        {/* BACKGROUND IMAGE */}
+        <div className="fixed inset-0 -z-10">
+          <img
+            src="/images/lawaid-citizen-dashboard.png"
+            alt="LawAid legal background"
+            className="h-full w-full object-cover object-center"
+          />
+        </div>
+
+        {/* SOFT LIGHT OVERLAY */}
+        <div className="fixed inset-0 -z-10 bg-white/25" />
+
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10">
 
           {/* Header */}
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5 mb-10">
-            <div>
-              <h1 className="text-3xl md:text-4xl font-bold text-navy">
-                Police Dashboard
-              </h1>
+          <div className="mb-10 text-center">
 
-              <p className="mt-2 text-gray-600">
-                Welcome, {user?.email || 'Police Officer'}
-              </p>
+            <div className="inline-flex items-center justify-center gap-4 mb-5">
 
-              <p className="mt-1 text-sm text-gray-500">
-                Draft FIRs and search relevant BNS sections.
-              </p>
+              <span className="text-[11px] tracking-[0.3em] uppercase text-[#052d53] font-medium">
+                POLICE PORTAL
+              </span>
             </div>
 
-            <Link
-              href="/police/new-fir"
-              className="inline-flex items-center justify-center bg-navy text-white px-6 py-3 rounded-lg font-semibold hover:opacity-90 transition"
-            >
-              + Create New FIR
-            </Link>
+            <h1 className="font-serif text-4xl md:text-5xl font-semibold text-[#052d53] tracking-[-0.025em]">
+              Police Dashboard
+            </h1>
+
+            <p className="mt-3 text-[#052d53] text-lg">
+              Welcome, {user?.email || 'Police Officer'}
+            </p>
+
+            <p className="mt-1 text-sm text-[#052d53]">
+              Draft FIRs and search relevant BNS sections.
+            </p>
+
+            <div className="mt-6">
+              <Link
+                href="/police/new-fir"
+                className="inline-flex items-center justify-center bg-[#12335B] text-white px-6 py-3 rounded-lg font-semibold hover:bg-[#0d2949] transition"
+              >
+                + Create New FIR
+              </Link>
+            </div>
+
           </div>
 
           {/* Main Features */}
           <section>
-            <h2 className="text-2xl font-bold text-navy mb-5">
-              Police Tools
-            </h2>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="flex items-end justify-between mb-5">
+              <div>
+                <h2 className="font-serif text-3xl font-semibold text-[#052d53]">
+                  Police Tools
+                </h2>
+
+                <div className="mt-3 h-px w-12 bg-[#b98528]" />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
 
               {/* FIR Drafting */}
               <Link
                 href="/police/new-fir"
-                className="group bg-white rounded-2xl shadow-sm border border-gray-200 p-7 hover:shadow-lg hover:-translate-y-1 transition-all"
+                className="group min-h-[245px] rounded-[18px] border border-white/70 bg-white/65 backdrop-blur-md shadow-[0_15px_40px_rgba(18,51,91,0.12)] p-7 transition-all duration-300 hover:-translate-y-1 hover:bg-white/80 hover:shadow-[0_20px_50px_rgba(18,51,91,0.18)]"
               >
-                <div className="w-14 h-14 rounded-xl bg-blue-50 flex items-center justify-center text-3xl mb-5">
+
+                {/* Icon */}
+                <div className="w-14 h-14 rounded-[12px] border border-[#d2a14b]/50 bg-[#f8f6f1]/70 flex items-center justify-center text-2xl mb-6 transition-transform duration-300 group-hover:-translate-y-1">
                   📄
                 </div>
 
-                <h3 className="text-xl font-bold text-navy group-hover:text-blue-700 transition">
+                {/* Title */}
+                <h3 className="font-serif text-[27px] font-semibold text-[#12335B] group-hover:text-[#b98528] transition-colors">
                   FIR Drafting
                 </h3>
 
-                <p className="mt-3 text-gray-600 leading-relaxed">
+                {/* Description */}
+                <p className="mt-3 text-[#315b82] leading-relaxed max-w-[500px]">
                   Create a structured FIR draft using the official IF1 format.
                   Enter incident details, complainant information, occurrence
                   details, accused information and FIR contents.
                 </p>
 
-                <div className="mt-6 inline-flex items-center text-sm font-semibold text-navy">
+                {/* Open */}
+                <div className="mt-6 inline-flex items-center gap-3 text-sm font-semibold text-[#12335B] group-hover:text-[#b98528] transition-colors">
                   Create FIR Draft
-                  <span className="ml-2 group-hover:translate-x-1 transition">
+
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full border border-[#b98528] text-[#b98528] transition-all duration-300 group-hover:bg-[#b98528] group-hover:text-white group-hover:translate-x-1">
                     →
                   </span>
                 </div>
+
               </Link>
 
               {/* BNS Search */}
               <Link
                 href="/bns-search"
-                className="group bg-white rounded-2xl shadow-sm border border-gray-200 p-7 hover:shadow-lg hover:-translate-y-1 transition-all"
+                className="group min-h-[245px] rounded-[18px] border border-white/70 bg-white/65 backdrop-blur-md shadow-[0_15px_40px_rgba(18,51,91,0.12)] p-7 transition-all duration-300 hover:-translate-y-1 hover:bg-white/80 hover:shadow-[0_20px_50px_rgba(18,51,91,0.18)]"
               >
-                <div className="w-14 h-14 rounded-xl bg-purple-50 flex items-center justify-center text-3xl mb-5">
+
+                {/* Icon */}
+                <div className="w-14 h-14 rounded-[12px] border border-[#d2a14b]/50 bg-[#f8f6f1]/70 flex items-center justify-center text-2xl mb-6 transition-transform duration-300 group-hover:-translate-y-1">
                   ⚖️
                 </div>
 
-                <h3 className="text-xl font-bold text-navy group-hover:text-blue-700 transition">
+                {/* Title */}
+                <h3 className="font-serif text-[27px] font-semibold text-[#12335B] group-hover:text-[#b98528] transition-colors">
                   BNS Section Search
                 </h3>
 
-                <p className="mt-3 text-gray-600 leading-relaxed">
+                {/* Description */}
+                <p className="mt-3 text-[#315b82] leading-relaxed max-w-[500px]">
                   Search for relevant Bharatiya Nyaya Sanhita sections while
                   preparing an FIR draft.
                 </p>
 
-                <div className="mt-6 inline-flex items-center text-sm font-semibold text-navy">
+                {/* Open */}
+                <div className="mt-6 inline-flex items-center gap-3 text-sm font-semibold text-[#12335B] group-hover:text-[#b98528] transition-colors">
                   Search BNS Sections
-                  <span className="ml-2 group-hover:translate-x-1 transition">
+
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full border border-[#b98528] text-[#b98528] transition-all duration-300 group-hover:bg-[#b98528] group-hover:text-white group-hover:translate-x-1">
                     →
                   </span>
                 </div>
+
               </Link>
 
             </div>
           </section>
 
           {/* Workflow */}
-          <section className="mt-10 bg-white rounded-2xl shadow-sm border border-gray-200 p-7">
-            <h2 className="text-xl font-bold text-navy">
+          <section className="mt-8 rounded-[18px] border border-white/70 bg-white/65 backdrop-blur-md shadow-[0_15px_40px_rgba(18,51,91,0.10)] p-7">
+
+            <div className="flex items-center gap-4">
+              <span className="h-px w-10 bg-[#b98528]" />
+
+              <span className="text-[11px] tracking-[0.3em] uppercase text-[#56718f] font-medium">
+                HOW IT WORKS
+              </span>
+            </div>
+
+            <h2 className="mt-4 font-serif text-3xl font-semibold text-[#12335B]">
               FIR Drafting Workflow
             </h2>
 
-            <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-5">
+            <div className="mt-7 grid grid-cols-1 md:grid-cols-3 gap-6">
 
               <WorkflowStep
                 number="1"
@@ -153,19 +205,21 @@ function WorkflowStep({
 }) {
   return (
     <div className="flex gap-4">
-      <div className="flex-shrink-0 w-10 h-10 rounded-full bg-navy text-white flex items-center justify-center font-bold">
+
+      <div className="flex-shrink-0 w-10 h-10 rounded-full bg-[#12335B] text-white flex items-center justify-center font-semibold border-2 border-[#b98528]">
         {number}
       </div>
 
       <div>
-        <h3 className="font-semibold text-navy">
+        <h3 className="font-semibold text-[#12335B]">
           {title}
         </h3>
 
-        <p className="text-sm text-gray-600 mt-1 leading-relaxed">
+        <p className="text-sm text-[#56718f] mt-1 leading-relaxed">
           {description}
         </p>
       </div>
+
     </div>
   )
 }
