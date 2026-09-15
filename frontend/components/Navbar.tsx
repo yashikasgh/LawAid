@@ -19,36 +19,50 @@ export default function Navbar() {
   const role = user?.role?.toLowerCase()
 
   const links =
-  role === 'citizen'
-    ? [
-        { href: '/', label: 'Home' },
-        { href: '/citizen', label: 'Citizen' },
-        { href: '/citizen/understand', label: 'My FIRs' },
-        { href: '/citizen/chat', label: 'Legal Assistant' },
-        { href: '/bns-search', label: 'BNS Search' },
-      ]
-    : role === 'police'
+    role === 'citizen'
       ? [
           { href: '/', label: 'Home' },
-          { href: '/police', label: 'Police' },
-          { href: '/police/new-fir', label: 'Draft FIR' },
-          { href: '/bns-search', label: 'BNS Search' },
-        ]
-      : [
-          { href: '/', label: 'Home' },
-          { href: '/bns-search', label: 'BNS Search' },
           { href: '/citizen', label: 'Citizen' },
-          { href: '/police', label: 'Police' },
-          { href: '/lawyer', label: 'Lawyer' },
+          { href: '/citizen/understand', label: 'My FIRs' },
+          { href: '/citizen/chat', label: 'Legal Assistant' },
+          { href: '/bns-search', label: 'BNS Search' },
         ]
+      : role === 'police'
+        ? [
+            { href: '/', label: 'Home' },
+            { href: '/police', label: 'Police' },
+            { href: '/police/new-fir', label: 'Draft FIR' },
+            { href: '/bns-search', label: 'BNS Search' },
+          ]
+        : [
+            { href: '/', label: 'Home' },
+            { href: '/bns-search', label: 'BNS Search' },
+            { href: '/citizen', label: 'Citizen' },
+            { href: '/police', label: 'Police' },
+            { href: '/lawyer', label: 'Lawyer' },
+          ]
 
   async function handleLogout() {
     await logout()
     setUser(null)
     setMenuOpen(false)
 
-    // Replace prevents browser Back from returning to the dashboard.
     router.replace('/login')
+    router.refresh()
+  }
+
+  async function handleHomeClick(event: React.MouseEvent<HTMLAnchorElement>) {
+    if (!user) {
+      return
+    }
+
+    event.preventDefault()
+
+    await logout()
+    setUser(null)
+    setMenuOpen(false)
+
+    router.replace('/')
     router.refresh()
   }
 
@@ -56,6 +70,7 @@ export default function Navbar() {
     <nav className="bg-navy text-white px-6 py-3 flex items-center justify-between sticky top-0 z-50 shadow-lg">
       <Link
         href="/"
+        onClick={handleHomeClick}
         className="text-xl font-bold flex items-center gap-2"
       >
         <span className="text-gold">⚖</span> LawAid
@@ -66,6 +81,7 @@ export default function Navbar() {
           <Link
             key={l.href}
             href={l.href}
+            onClick={l.href === '/' ? handleHomeClick : undefined}
             className={`text-sm font-medium hover:text-gold transition ${
               path === l.href
                 ? 'text-gold border-b-2 border-gold'
@@ -83,7 +99,10 @@ export default function Navbar() {
             onClick={() => setMenuOpen(!menuOpen)}
             className="bg-gold text-navy px-4 py-2 rounded-lg font-bold text-sm hover:opacity-90"
           >
-            {role ? role.charAt(0).toUpperCase() + role.slice(1) : 'Account'} ▾
+            {role
+              ? role.charAt(0).toUpperCase() + role.slice(1)
+              : 'Account'}{' '}
+            ▾
           </button>
 
           {menuOpen && (
