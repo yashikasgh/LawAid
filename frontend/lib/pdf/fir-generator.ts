@@ -1,5 +1,11 @@
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
 
+export type ActSectionEntry = {
+  act: string
+  section: string
+  source?: 'ai' | 'manual'
+}
+
 export type FIRFormData = {
   district: string
   policeStation: string
@@ -7,6 +13,7 @@ export type FIRFormData = {
   firNo: string
   firDate: string
 
+  actEntries?: ActSectionEntry[]
   act1: string
   section1: string
   act2: string
@@ -270,13 +277,23 @@ export async function generateFIRPdf(
   )
 
   // ---------------------------------------------------------
-  // 2. Acts and Sections
+  // 2. Acts and Sections (Dynamic entries support)
   // ---------------------------------------------------------
+  const entries = form.actEntries && form.actEntries.length > 0 ? form.actEntries : []
+  const act1Text = entries[0]?.act || form.act1 || ''
+  const sec1Text = entries[0]?.section || form.section1 || ''
+  const act2Text = entries[1]?.act || form.act2 || ''
+  const sec2Text = entries[1]?.section || form.section2 || ''
+  const act3Text = entries[2]?.act || form.act3 || ''
+  const sec3Text = entries[2]?.section || form.section3 || ''
+  const otherActsText = entries.length > 3
+    ? entries.slice(3).map(e => `${e.act} - ${e.section}`).filter(s => s.trim() !== '-').join('; ')
+    : form.otherActs || ''
 
   drawField(
     page1,
     font,
-    form.act1,
+    act1Text,
     126,
     144,
     157,
@@ -286,7 +303,7 @@ export async function generateFIRPdf(
   drawField(
     page1,
     font,
-    form.section1,
+    sec1Text,
     341,
     144,
     212,
@@ -296,7 +313,7 @@ export async function generateFIRPdf(
   drawField(
     page1,
     font,
-    form.act2,
+    act2Text,
     126,
     165,
     157,
@@ -306,7 +323,7 @@ export async function generateFIRPdf(
   drawField(
     page1,
     font,
-    form.section2,
+    sec2Text,
     341,
     165,
     212,
@@ -316,7 +333,7 @@ export async function generateFIRPdf(
   drawField(
     page1,
     font,
-    form.act3,
+    act3Text,
     126,
     186,
     157,
@@ -326,7 +343,7 @@ export async function generateFIRPdf(
   drawField(
     page1,
     font,
-    form.section3,
+    sec3Text,
     341,
     186,
     212,
@@ -336,7 +353,7 @@ export async function generateFIRPdf(
   drawField(
     page1,
     font,
-    form.otherActs,
+    otherActsText,
     223,
     207,
     330,

@@ -35,6 +35,102 @@ LEGAL_DISCLAIMER = (
 )
 
 
+def _build_retrieval_fallback_analysis(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Build deterministic, grounded fallback analysis cards from retrieved ChromaDB/RRF candidates when LLM reasoning is unavailable."""
+    fallback_items = []
+    seen_sections = set()
+
+    for cand in candidates:
+        sec = str(cand.get("section", "")).strip()
+        if not sec:
+            continue
+
+        # Deduplicate sibling clauses for cleaner citizen presentation
+        if sec in seen_sections:
+            continue
+        seen_sections.add(sec)
+
+        title = str(cand.get("title", "")).strip()
+        clause = str(cand.get("clause", "")).strip()
+        doc_id = cand.get("id") or f"bns_{sec}"
+
+        sched_1 = cand.get("schedule_1", {})
+        if not isinstance(sched_1, dict):
+            sched_1 = {}
+
+        offence_name = sched_1.get("offence") or title or f"Section {sec}"
+        punishment_val = sched_1.get("punishment") or "Not available in retrieved source"
+        bailable_val = sched_1.get("bailable") or "Not available in retrieved source"
+        cognizable_val = sched_1.get("cognizable") or "Not available in retrieved source"
+        court_val = sched_1.get("court") or "Not available in retrieved source"
+
+        sec_def = cand.get("section_definition") or cand.get("target_clause_text") or cand.get("text", "")
+        clean_def = sec_def.strip() if sec_def else title
+        if len(clean_def) > 300:
+            clean_def = clean_def[:297] + "..."
+
+        reasoning = (
+            f"Relevant BNS provision retrieved from legal database: {title} (§{sec}). "
+            f"Statutory text: \"{clean_def}\". "
+            "Further factual investigation required to determine statutory applicability."
+        )
+
+        distance = float(cand.get("distance", 1.0))
+        similarity = round(max(0.0, 1.0 - distance), 4)
+
+        fallback_items.append({
+            "offence_type": offence_name,
+            "section": sec,
+            "clause": clause,
+            "title": title,
+            "unit_type": "core_definition",
+            "applicability": "uncertain",
+            "statutory_structure": {
+                "structural_unit_type": "core_definition",
+                "core_elements": [title],
+                "conditional_elements": [],
+                "aggravated_elements": [],
+                "mitigating_elements": []
+            },
+            "prerequisite_evidence": [
+                {
+                    "requirement": title,
+                    "requirement_type": "core",
+                    "evidence_status": "missing",
+                    "incident_evidence": "Retrieved from BNS database.",
+                    "reason": "Vector search match candidate."
+                }
+            ],
+            "core_elements": [title],
+            "conditional_elements": [],
+            "satisfied_elements": [],
+            "missing_elements": [title],
+            "contradicted_elements": [],
+            "relationship_analysis": {
+                "relationship_type": "none",
+                "related_candidate": "",
+                "reason": "Retrieved provision candidate."
+            },
+            "reasoning": reasoning,
+            "explanation": reasoning,
+            "punishment": punishment_val,
+            "bailable": bailable_val,
+            "cognizable": cognizable_val,
+            "court": court_val,
+            "similarity": similarity,
+            "evidence": [
+                {
+                    "document_id": doc_id,
+                    "section": sec,
+                    "clause": clause,
+                    "rank": cand.get("rank", 0)
+                }
+            ]
+        })
+
+    return fallback_items
+
+
 def run_pipeline(
     raw_incident: str,
     llm_client: Optional[LLMClient] = None,
@@ -146,15 +242,26 @@ def run_pipeline(
         llm_client=llm_client
     )
 
+    analysis_items = analysis_result.get("analysis", [])
+    pipeline_source = "pipeline"
+
+    # If LLM generation fails or returns empty analysis, use deterministic retrieval fallback
+    if not analysis_items or analysis_result.get("status") == "analysis_unavailable":
+        fallback_analysis = _build_retrieval_fallback_analysis(reranked_candidates)
+        if fallback_analysis:
+            analysis_items = fallback_analysis
+            pipeline_source = "retrieval_fallback"
+
     # 9. Return Final Pipeline Structure
     return {
         "status": analysis_result.get("status", "success"),
+        "source": pipeline_source,
         "sanitized_incident": sanitized_text,
         "privacy_metadata": {
             "detections": privacy_res.get("detections", []),
             "replacement_map": privacy_res.get("replacement_map", {})
         },
-        "analysis": analysis_result.get("analysis", []),
+        "analysis": analysis_items,
         "limitations": analysis_result.get("limitations", []),
         "disclaimer": LEGAL_DISCLAIMER,
         "reranked_candidates": reranked_candidates

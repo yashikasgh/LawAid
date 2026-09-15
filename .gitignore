@@ -10,3 +10,7 @@ node_modules/
 .vscode/
 .idea/
 ai/rag/data/chroma_db/
+# Local SQLite database
+*.db
+*.sqlite
+*.sqlite3
