@@ -6,7 +6,8 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.mongo import fs
+from app.core.mongo import mongo_available
+
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.services.fir_auth import register_fir, verify_fir
@@ -122,11 +123,18 @@ async def upload_fir(file: UploadFile = File(...)):
     if file.content_type not in ["application/pdf", "image/jpeg", "image/png"]:
         raise HTTPException(status_code=400, detail="Only PDF, JPEG, PNG files allowed")
 
+    from app.core.mongo import mongo_available, fs as _fs
+    if not mongo_available or _fs is None:
+        raise HTTPException(
+            status_code=503,
+            detail="File storage (MongoDB/GridFS) is currently unavailable. Start MongoDB to enable document uploads."
+        )
+
     contents = await file.read()
     try:
-        file_id = fs.put(contents, filename=file.filename, content_type=file.content_type)
-    except Exception:
-        file_id = "doc_" + str(int(time.time()))
+        file_id = _fs.put(contents, filename=file.filename, content_type=file.content_type)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"File storage failed: {str(e)}")
 
     return {
         "status": "uploaded",
@@ -144,19 +152,34 @@ async def register_fir_route(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """
+    Register a FIR. Extracts text from the uploaded file and stores it as complaint_text
+    so duplicate detection can compare against it.
+    """
     contents = await file.read()
+
+    # Extract complaint text from the uploaded document (for duplicate detection)
+    extracted_text = ""
+    try:
+        extracted_text = _extract_text_with_ocr(contents, file.filename or "", file.content_type or "")
+    except Exception:
+        extracted_text = ""
+
     record = register_fir(
         db=db,
         file_bytes=contents,
         officer_id=current_user.id,
         station_code=station_code,
+        complaint_text=extracted_text[:2000] if extracted_text else None,  # Store up to 2000 chars
     )
     return {
         "fir_id": record.fir_id,
         "sha256_hash": record.sha256_hash,
         "status": record.status,
         "created_at": record.created_at,
+        "complaint_text_saved": bool(extracted_text),
     }
+
 
 
 # ── FIR Verify ───────────────────────────────────────────────────────────────
@@ -170,6 +193,36 @@ async def verify_fir_route(
     contents = await file.read()
     result = verify_fir(db=db, fir_id=fir_id, file_bytes=contents)
     return result
+
+
+# ── Helper for BNS Section Detection ─────────────────────────────────────────
+
+import re
+
+def detect_bns_sections(text: str) -> list:
+    """
+    Detects BNS/IPC section references from OCR-extracted or document text.
+    Handles common formats:
+        Section 103, Section 103(a), Sec. 103, s. 103
+        u/s 103 BNS, U/S 115 BNS, Under Section 103
+        103 BNS, BNS 103
+    Returns a sorted deduplicated list of section number strings.
+    """
+    patterns = [
+        r'\bsec(?:tion)?\.?\s*(\d+(?:\([a-zA-Z0-9]+\))?)',   # Section 103, Sec. 103
+        r'\bu[/\\]s\s*(\d+(?:\([a-zA-Z0-9]+\))?)',            # u/s 103
+        r'\bunder\s+section\s+(\d+(?:\([a-zA-Z0-9]+\))?)',    # Under Section 103
+        r'\bBNS\s+(\d+(?:\([a-zA-Z0-9]+\))?)',                # BNS 103
+        r'\b(\d+(?:\([a-zA-Z0-9]+\)?)?)\s+BNS\b',            # 103 BNS
+        r'\bIPC\s+(\d+(?:\([a-zA-Z0-9]+\))?)',               # IPC 302 (legacy references)
+    ]
+    found = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            sec = match.group(1).strip()
+            if sec and 1 <= int(re.match(r'\d+', sec).group()) <= 359:  # BNS has sections 1-358
+                found.add(sec)
+    return sorted(found, key=lambda x: int(re.match(r'\d+', x).group()))
 
 
 # ── Helper for OCR Extraction ────────────────────────────────────────────────
@@ -263,14 +316,23 @@ async def understand_fir(file: UploadFile = File(...)):
             detail="Unsupported file format. Please upload a PDF document or JPG/PNG image."
         )
 
-    # 1. Store in GridFS (with fallback if Mongo is offline)
-    try:
-        file_id = str(fs.put(contents, filename=file.filename, content_type=file.content_type))
-    except Exception:
-        file_id = "doc_" + str(int(time.time()))
+    # 1. Store in GridFS (reports storage status honestly — does not fake a file ID)
+    from app.core.mongo import mongo_available, fs as _mongo_fs
+    file_id = None
+    file_stored = False
+    if mongo_available and _mongo_fs is not None:
+        try:
+            file_id = str(_mongo_fs.put(contents, filename=file.filename, content_type=file.content_type))
+            file_stored = True
+        except Exception as store_err:
+            file_id = None
+            file_stored = False
+    # Note: file_stored=False is reported in response but does NOT block analysis
 
     # 2. Text extraction & OCR
     extracted_text = _extract_text_with_ocr(contents, file.filename, file.content_type)
+    detected_sections = detect_bns_sections(extracted_text) if extracted_text else []
+
 
     if not extracted_text or len(extracted_text.strip()) < 15:
         raise HTTPException(
@@ -358,8 +420,10 @@ async def understand_fir(file: UploadFile = File(...)):
     return {
         "status": "ok",
         "file_id": file_id,
+        "file_stored": file_stored,
         "filename": file.filename,
         "extracted_text": extracted_text[:1200],
+        "detected_sections": detected_sections,  # BNS sections found in document text
         "entities": ai_res.get("privacy_metadata", {}).get("detections", []),
         "summary": plain_summary,
         "charges": display_charges,
@@ -369,6 +433,7 @@ async def understand_fir(file: UploadFile = File(...)):
         "next_steps": next_steps,
         "disclaimer": disclaimer_text,
     }
+
 
 
 # ── FIR Get / Generate (P1 Task 7) ───────────────────────────────────────────
@@ -384,44 +449,47 @@ class FIRGenerateRequest(BaseModel):
 def generate_fir(body: FIRGenerateRequest = None):
     """
     Generates a formal First Information Report (FIR) draft as a PDF.
-    Returns official FIR ID, generated timestamp, and verification hash.
+    Returns official FIR ID (UUID4-based), SHA-256 hash, and download URL.
     """
     import hashlib
+    import uuid
     import datetime
     import io
+    import textwrap
     try:
         from reportlab.pdfgen import canvas
         from reportlab.lib.pagesizes import A4
     except ImportError:
-        raise HTTPException(status_code=500, detail="PDF generation module (reportlab) not installed.")
+        raise HTTPException(status_code=500, detail="PDF generation module (reportlab) not installed. Run: pip install reportlab")
 
     now = datetime.datetime.now()
     year = now.year
-    seq = int(now.timestamp()) % 10000
-    fir_id = f"FIR/{year}/{seq:04d}"
+
+    # UUID4-based FIR ID — unpredictable and globally unique
+    fir_uuid = uuid.uuid4().hex[:8].upper()
+    fir_id = f"FIR/{year}/{fir_uuid}"
 
     complaint_text = body.complaint if body and body.complaint else "General complaint lodged."
-    complainant_name = body.complainant_name if body and body.complainant_name else "Citizen"
+    complainant_name = body.complainant_name if body and body.complainant_name else "Protected / Citizen"
     station_code = body.station_code if body else "PS001"
 
-    # Create PDF in memory
+    # Build PDF in memory
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
+
     c.setFont("Helvetica-Bold", 16)
     c.drawString(50, height - 50, "FIRST INFORMATION REPORT (FIR)")
-    c.setFont("Helvetica", 12)
+    c.setFont("Helvetica", 11)
     c.drawString(50, height - 80, f"FIR ID: {fir_id}")
     c.drawString(50, height - 100, f"Date: {now.strftime('%Y-%m-%d %H:%M:%S')}")
     c.drawString(50, height - 120, f"Police Station: {station_code}")
     c.drawString(50, height - 140, f"Complainant: {complainant_name}")
-    
+    c.setFont("Helvetica-Bold", 11)
     c.drawString(50, height - 170, "Incident Description:")
     c.setFont("Helvetica", 10)
-    
-    # Wrap text
-    import textwrap
-    lines = textwrap.wrap(complaint_text, width=80)
+
+    lines = textwrap.wrap(complaint_text, width=85)
     y_pos = height - 190
     for line in lines:
         c.drawString(50, y_pos, line)
@@ -430,19 +498,29 @@ def generate_fir(body: FIRGenerateRequest = None):
             c.showPage()
             c.setFont("Helvetica", 10)
             y_pos = height - 50
-    
+
     c.save()
     pdf_bytes = buffer.getvalue()
     buffer.close()
 
     sha256_hash = hashlib.sha256(pdf_bytes).hexdigest()
-    
-    # Store in MongoDB (with fallback when Mongo/GridFS is offline)
-    from app.core.mongo import fs
-    try:
-        file_id = fs.put(pdf_bytes, filename=f"{fir_id.replace('/', '_')}.pdf", content_type="application/pdf", metadata={"fir_id": fir_id, "hash": sha256_hash})
-    except Exception:
-        file_id = "doc_" + str(int(now.timestamp()))
+
+    # Store in MongoDB/GridFS — report honestly whether it succeeded
+    from app.core.mongo import mongo_available, fs as _mongo_fs
+    file_id = None
+    file_stored = False
+    if mongo_available and _mongo_fs is not None:
+        try:
+            file_id = str(_mongo_fs.put(
+                pdf_bytes,
+                filename=f"{fir_id.replace('/', '_')}.pdf",
+                content_type="application/pdf",
+                metadata={"fir_id": fir_id, "sha256_hash": sha256_hash}
+            ))
+            file_stored = True
+        except Exception:
+            file_id = None
+            file_stored = False
 
     return {
         "fir_id": fir_id,
@@ -451,31 +529,50 @@ def generate_fir(body: FIRGenerateRequest = None):
         "created_at": now.isoformat(),
         "station_code": station_code,
         "district": body.district if body else "Central",
-        "pdf_url": f"/api/fir/download/{str(file_id)}",
+        "file_stored": file_stored,
+        "pdf_url": f"/api/fir/download/{file_id}" if file_id else None,
         "summary": f"Draft FIR registered under ID {fir_id}. Ready for official review and station stamp.",
     }
+
 
 from fastapi.responses import StreamingResponse
 
 @router.get("/download/{file_id}")
 def download_fir(file_id: str):
+    """Download a stored FIR PDF from MongoDB/GridFS."""
+    from app.core.mongo import mongo_available, fs as _mongo_fs
+    if not mongo_available or _mongo_fs is None:
+        raise HTTPException(
+            status_code=503,
+            detail="File storage (MongoDB) is unavailable. Cannot retrieve files."
+        )
     from bson.objectid import ObjectId
     try:
-        file_data = fs.get(ObjectId(file_id))
+        file_data = _mongo_fs.get(ObjectId(file_id))
         return StreamingResponse(
             file_data,
-            media_type=file_data.content_type,
+            media_type=file_data.content_type or "application/pdf",
             headers={"Content-Disposition": f"attachment; filename={file_data.filename}"}
         )
-    except Exception as e:
-        raise HTTPException(status_code=404, detail="File not found")
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not found or invalid file ID.")
+
 
 @router.get("/{fir_id}")
-def get_fir(fir_id: str):
+def get_fir(fir_id: str, db: Session = Depends(get_db)):
+    from app.models.fir_registry import FIRRegistry
+    record = db.query(FIRRegistry).filter(FIRRegistry.fir_id == fir_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="FIR not found")
+    
     return {
-        "fir_id": fir_id,
-        "status": "registered",
-        "message": f"FIR record {fir_id} on file.",
+        "fir_id": record.fir_id,
+        "sha256_hash": record.sha256_hash,
+        "officer_id": record.officer_id,
+        "station_code": record.station_code,
+        "status": record.status,
+        "created_at": record.created_at,
+        "complaint_text": record.complaint_text,
     }
 
 
@@ -490,7 +587,6 @@ def check_duplicate_route(body: DuplicateCheckRequest, db: Session = Depends(get
     """
     Checks whether a complaint is likely a duplicate of an existing FIR.
     Accepts a JSON body { complaint_text } (not a query parameter).
-    Currently a stub — returns is_duplicate=False always.
     """
     result = check_duplicate(db, body.complaint_text)
     return result

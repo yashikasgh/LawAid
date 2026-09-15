@@ -148,6 +148,8 @@ export default function PoliceDashboard() {
               </Link>
 
             </div>
+            
+            <DraftsList />
           </section>
 
           {/* Workflow */}
@@ -223,3 +225,57 @@ function WorkflowStep({
     </div>
   )
 }
+function DraftsList() {
+  const [drafts, setDrafts] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    async function loadDrafts() {
+      try {
+        const token = localStorage.getItem("access_token")
+        const res = await fetch("http://localhost:8000/api/fir/drafts", {
+          headers: { "Authorization": `Bearer ${token}` }
+        })
+        if (res.ok) {
+          const data = await res.json()
+          setDrafts(data)
+        }
+      } catch (e) {
+        console.error("Failed to load drafts", e)
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadDrafts()
+  }, [])
+
+  if (loading) return null
+
+  if (drafts.length === 0) return null
+
+  return (
+    <div className="mt-8">
+      <h3 className="font-serif text-[24px] font-semibold text-[#12335B] mb-4">Recent Drafts</h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {drafts.map(d => (
+          <div key={d.draft_id} className="bg-white/80 border border-gray-200 p-4 rounded-xl shadow-sm">
+            <h4 className="font-bold text-[#12335B] mb-1">Draft FIR</h4>
+            <p className="text-sm text-gray-600 truncate mb-2">{d.statement?.substring(0, 80) || "No statement"}</p>
+            <p className="text-xs text-gray-400 mb-3">Updated: {new Date(d.updated_at).toLocaleString()}</p>
+            <Link 
+              href="/police/new-fir"
+              onClick={() => {
+                sessionStorage.setItem("lawaid_draft_id", d.draft_id)
+                sessionStorage.setItem("lawaid_fir_draft", JSON.stringify(d))
+              }}
+              className="text-sm font-semibold text-[#b98528] hover:underline"
+            >
+              Resume Draft ?
+            </Link>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+

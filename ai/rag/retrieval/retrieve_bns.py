@@ -12,7 +12,11 @@ import ollama
 # Configuration Constants
 EMBEDDING_MODEL = "nomic-embed-text"
 COLLECTION_NAME = "lawaid"
-DB_PATH = "ai/rag/data/chroma_db"
+# Use absolute path derived from this file's location so it works regardless of CWD
+# ai/rag/retrieval/ -> ai/rag/ -> ai/ -> project_root
+_RETRIEVAL_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _RETRIEVAL_DIR.parents[2]  # go up: retrieval -> rag -> ai -> project root
+DB_PATH = str(_PROJECT_ROOT / "ai" / "rag" / "data" / "chroma_db")
 TOP_K = 5
 
 

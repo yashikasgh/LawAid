@@ -11,8 +11,12 @@ from tqdm import tqdm
 # Configuration Constants
 EMBEDDING_MODEL = "nomic-embed-text"
 COLLECTION_NAME = "lawaid"
-DB_PATH = "ai/rag/data/chroma_db"
-DOCUMENTS_PATH = "ai/rag/data/processed/documents.json"
+# Use absolute paths derived from this file's location (works regardless of CWD)
+# ai/rag/embedding/ -> ai/rag/ -> ai/ -> project_root
+_EMBEDDING_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _EMBEDDING_DIR.parents[2]  # go up: embedding -> rag -> ai -> project root
+DB_PATH = str(_PROJECT_ROOT / "ai" / "rag" / "data" / "chroma_db")
+DOCUMENTS_PATH = str(_PROJECT_ROOT / "ai" / "rag" / "data" / "processed" / "documents.json")
 BATCH_SIZE = 25
 
 

@@ -33,8 +33,17 @@ def check_duplicate(db: Session, complaint_text: str, similarity_threshold: floa
     except Exception:
         recent_firs = []
 
+    # Query recent Complaints
+    recent_complaints = []
+    try:
+        from app.models.complaint import Complaint
+        recent_complaints = db.query(Complaint).order_by(Complaint.created_at.desc()).limit(50).all()
+    except Exception:
+        recent_complaints = []
+
     highest_score = 0.0
-    matched_fir_id = None
+    matched_id = None
+    matched_type = None
 
     # Check against recent FIR IDs using token similarity on complaint text
     for fir in recent_firs:
@@ -43,7 +52,18 @@ def check_duplicate(db: Session, complaint_text: str, similarity_threshold: floa
         score = _token_similarity(cleaned_input, fir.complaint_text)
         if score > highest_score:
             highest_score = score
-            matched_fir_id = fir.fir_id
+            matched_id = fir.fir_id
+            matched_type = "FIR"
+
+    # Check against recent Complaints
+    for complaint in recent_complaints:
+        if not complaint.complaint_text:
+            continue
+        score = _token_similarity(cleaned_input, complaint.complaint_text)
+        if score > highest_score:
+            highest_score = score
+            matched_id = str(complaint.id)
+            matched_type = "Complaint"
 
     # If sentence-transformers is available, attempt semantic embedding similarity
     try:
@@ -58,14 +78,27 @@ def check_duplicate(db: Session, complaint_text: str, similarity_threshold: floa
             sim_score = util.cos_sim(input_emb, fir_emb).item()
             if sim_score > highest_score:
                 highest_score = sim_score
-                matched_fir_id = fir.fir_id
+                matched_id = fir.fir_id
+                matched_type = "FIR"
+                
+        for complaint in recent_complaints:
+            if not complaint.complaint_text:
+                continue
+            complaint_emb = model.encode(complaint.complaint_text, convert_to_tensor=True)
+            sim_score = util.cos_sim(input_emb, complaint_emb).item()
+            if sim_score > highest_score:
+                highest_score = sim_score
+                matched_id = str(complaint.id)
+                matched_type = "Complaint"
     except Exception:
         pass
 
     is_duplicate = highest_score >= similarity_threshold
     return {
         "is_duplicate": is_duplicate,
-        "similar_fir_id": matched_fir_id if is_duplicate else None,
+        "similar_fir_id": matched_id if (is_duplicate and matched_type == "FIR") else None,
+        "similar_complaint_id": matched_id if (is_duplicate and matched_type == "Complaint") else None,
+        "matched_type": matched_type if is_duplicate else None,
         "similarity_score": round(highest_score, 4),
         "status": "duplicate_flagged" if is_duplicate else "original_complaint",
         "threshold": similarity_threshold,
