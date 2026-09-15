@@ -1,9 +1,10 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import Navbar from '@/components/Navbar'
-import { bnsAPI } from '@/lib/api'
+import { policeAPI } from '@/lib/api'
+import { ActSectionEntry } from '@/lib/pdf/fir-generator'
 
 type FormData = {
   district: string
@@ -12,6 +13,7 @@ type FormData = {
   firNo: string
   firDate: string
 
+  actEntries: ActSectionEntry[]
   act1: string
   section1: string
   act2: string
@@ -65,11 +67,18 @@ type FormData = {
 const initialForm: FormData = {
   district: '',
   policeStation: '',
-  year: '',
-  firNo: '',
-  firDate: '',
+  year: new Date().getFullYear().toString(),
+  firNo: 'Draft',
+  firDate: new Date().toLocaleDateString('en-GB'),
 
-  act1: '',
+  actEntries: [
+    {
+      act: 'Bharatiya Nyaya Sanhita, 2023',
+      section: '',
+      source: 'ai',
+    },
+  ],
+  act1: 'Bharatiya Nyaya Sanhita, 2023',
   section1: '',
   act2: '',
   section2: '',
@@ -96,7 +105,7 @@ const initialForm: FormData = {
   complainantName: '',
   fatherHusbandName: '',
   dob: '',
-  nationality: '',
+  nationality: 'Indian',
   passportNo: '',
   passportDate: '',
   passportPlace: '',
@@ -110,7 +119,7 @@ const initialForm: FormData = {
   inquestDetails: '',
   firContents: '',
 
-  actionTaken: '',
+  actionTaken: 'Registered the case and took up the investigation',
   officerRank: '',
   officerName: '',
   officerNo: '',
@@ -119,1412 +128,1068 @@ const initialForm: FormData = {
   dispatchTime: '',
 }
 
+const SAMPLE_INCIDENTS = [
+  {
+    title: 'Mobile Snatching in Market',
+    text: 'On 14 September 2026 at approximately 8 PM, while the complainant was returning home near the central market, an unknown male suddenly grabbed her mobile phone (iPhone 14 worth ₹65,000) from her hand and fled into the crowd.',
+  },
+  {
+    title: 'Cyber Fraud / Online Cheating',
+    text: 'On 12 September 2026, complainant received a fraudulent phone call claiming to be from his bank. The caller induced him to transfer ₹45,000 via UPI under pretext of updating KYC details.',
+  },
+  {
+    title: 'House Theft & Burglary',
+    text: 'Between 10 PM on 11 September 2026 and 6 AM on 12 September 2026, unknown persons broke open the main lock of complainant house at 42 Park Street and stole gold ornaments valued at ₹1,20,000 and ₹15,000 cash.',
+  },
+]
+
+function mapFirDataToFormData(firData: any, sanitizedIncident: string): FormData {
+  const occ = firData?.occurrence || {}
+  const place = firData?.place_of_occurrence || {}
+  const comp = firData?.complainant || {}
+  const officer = firData?.officer || {}
+  const acts = firData?.acts_sections || []
+  const info = firData?.information_received || {}
+  const gd = firData?.general_diary || {}
+  const dispatch = firData?.dispatch_to_court || {}
+
+  const sanitizeVal = (val?: string) => {
+    if (!val || val === 'Not provided' || val === 'N/A' || val === 'Unknown') return ''
+    return val.trim()
+  }
+
+  return {
+    district: sanitizeVal(firData?.district),
+    policeStation: sanitizeVal(firData?.police_station),
+    year: sanitizeVal(firData?.year) || new Date().getFullYear().toString(),
+    firNo: sanitizeVal(firData?.fir_number) || 'Draft',
+    firDate: sanitizeVal(firData?.fir_date) || new Date().toLocaleDateString('en-GB'),
+
+    actEntries: Array.isArray(acts) && acts.length > 0
+      ? acts.map((a: any) => ({
+          act: a.act || 'Bharatiya Nyaya Sanhita, 2023',
+          section: sanitizeVal(a.sections),
+          source: 'ai' as const,
+        }))
+      : [
+          {
+            act: 'Bharatiya Nyaya Sanhita, 2023',
+            section: '',
+            source: 'ai' as const,
+          },
+        ],
+    act1: acts[0]?.act || 'Bharatiya Nyaya Sanhita, 2023',
+    section1: sanitizeVal(acts[0]?.sections),
+    act2: acts[1]?.act || (acts[1]?.sections ? 'Bharatiya Nyaya Sanhita, 2023' : ''),
+    section2: sanitizeVal(acts[1]?.sections),
+    act3: acts[2]?.act || (acts[2]?.sections ? 'Bharatiya Nyaya Sanhita, 2023' : ''),
+    section3: sanitizeVal(acts[2]?.sections),
+    otherActs: acts.slice(3).map((a: any) => `${a.act} - ${a.sections}`).join('\n'),
+
+    occurrenceDay: sanitizeVal(occ.day),
+    occurrenceDate: sanitizeVal(occ.date || occ.date_from),
+    occurrenceTime: sanitizeVal(occ.time || occ.time_from),
+    informationDate: sanitizeVal(info.date),
+    informationTime: sanitizeVal(info.time),
+    gdEntry: sanitizeVal(gd.entry_numbers),
+    gdTime: sanitizeVal(gd.time),
+
+    informationType: sanitizeVal(firData?.type_of_information) || 'Written',
+
+    placeDirection: sanitizeVal(place.direction_distance_from_ps),
+    beatNo: sanitizeVal(place.beat_no),
+    placeAddress: sanitizeVal(place.address),
+    outsidePoliceStation: sanitizeVal(place.outside_police_station),
+    outsideDistrict: sanitizeVal(place.district),
+
+    complainantName: sanitizeVal(comp.name),
+    fatherHusbandName: sanitizeVal(comp.father_husband_name),
+    dob: sanitizeVal(comp.date_year_of_birth),
+    nationality: sanitizeVal(comp.nationality) || 'Indian',
+    passportNo: sanitizeVal(comp.passport_no),
+    passportDate: sanitizeVal(comp.passport_date_of_issue),
+    passportPlace: sanitizeVal(comp.passport_place_of_issue),
+    occupation: sanitizeVal(comp.occupation),
+    complainantAddress: sanitizeVal(comp.address),
+
+    accusedDetails: sanitizeVal(firData?.accused_details),
+    delayReason: sanitizeVal(firData?.delay_reason),
+    propertyDetails: sanitizeVal(firData?.property_details),
+    propertyValue: sanitizeVal(firData?.property_value),
+    inquestDetails: sanitizeVal(firData?.inquest_ud_case),
+    firContents: sanitizeVal(firData?.fir_contents) || sanitizedIncident || '',
+
+    actionTaken: sanitizeVal(firData?.action_taken) || 'Registered the case and took up the investigation',
+    officerRank: sanitizeVal(officer.rank),
+    officerName: sanitizeVal(officer.name),
+    officerNo: sanitizeVal(officer.number),
+
+    dispatchDate: sanitizeVal(dispatch.date),
+    dispatchTime: sanitizeVal(dispatch.time),
+  }
+}
+
 export default function NewFIRPage() {
+  const [statement, setStatement] = useState('')
   const [form, setForm] = useState<FormData>(initialForm)
 
-  const [statement, setStatement] = useState('')
-  const [audioFile, setAudioFile] = useState<File | null>(null)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState('')
+  const [draftGenerated, setDraftGenerated] = useState(false)
+  const [supportedSections, setSupportedSections] = useState<string[]>([])
+  const [verifiedByOfficer, setVerifiedByOfficer] = useState(false)
+  const [showRegenerateModal, setShowRegenerateModal] = useState(false)
 
-  const [bnsQuery, setBnsQuery] = useState('')
-  const [bnsResults, setBnsResults] = useState<
-    {
-      section: string
-      title: string
-      similarity: number
-    }[]
-  >([])
+  // Speech-to-text state
+  const [isListening, setIsListening] = useState(false)
+  const [speechSupported, setSpeechSupported] = useState(true)
+  const [speechError, setSpeechError] = useState('')
+  const recognitionRef = useRef<any>(null)
 
-  const [bnsLoading, setBnsLoading] = useState(false)
-  const [bnsError, setBnsError] = useState('')
+  const [saveStatus, setSaveStatus] = useState('')
 
-  function updateField(
-    field: keyof FormData,
-    value: string
-  ) {
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const SpeechRecognitionAPI =
+        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+      if (!SpeechRecognitionAPI) {
+        setSpeechSupported(false)
+      }
+
+      const saved = sessionStorage.getItem('lawaid_fir_draft')
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved)
+          if (parsed.statement) setStatement(parsed.statement)
+          setForm((prev) => ({ ...prev, ...parsed }))
+          setDraftGenerated(true)
+        } catch (e) {
+          console.error('Failed to parse saved draft:', e)
+        }
+      }
+    }
+  }, [])
+
+  function toggleListening() {
+    if (isListening) {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop()
+      }
+      setIsListening(false)
+      return
+    }
+
+    if (typeof window === 'undefined') return
+    const SpeechRecognitionAPI =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+
+    if (!SpeechRecognitionAPI) {
+      setSpeechError('Speech recognition is not supported by your browser. Please type the statement.')
+      return
+    }
+
+    try {
+      const recognition = new SpeechRecognitionAPI()
+      recognition.continuous = true
+      recognition.interimResults = false
+      recognition.lang = 'en-IN'
+
+      recognition.onstart = () => {
+        setIsListening(true)
+        setSpeechError('')
+      }
+
+      recognition.onresult = (event: any) => {
+        let transcriptChunk = ''
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            transcriptChunk += event.results[i][0].transcript
+          }
+        }
+        if (transcriptChunk) {
+          setStatement((prev) => (prev ? `${prev.trim()} ${transcriptChunk.trim()}` : transcriptChunk.trim()))
+        }
+      }
+
+      recognition.onerror = (event: any) => {
+        console.warn('Speech recognition notice:', event.error)
+        if (event.error === 'not-allowed') {
+          setSpeechError('Microphone permission denied. Please allow microphone access.')
+        }
+        setIsListening(false)
+      }
+
+      recognition.onend = () => {
+        setIsListening(false)
+      }
+
+      recognitionRef.current = recognition
+      recognition.start()
+    } catch (err) {
+      console.error('Failed to start speech recognition:', err)
+      setIsListening(false)
+    }
+  }
+
+  function updateField(field: keyof FormData, value: string) {
     setForm((prev) => ({
       ...prev,
       [field]: value,
     }))
   }
 
-  async function searchBNS() {
-    if (bnsQuery.trim().length < 3) {
-      setBnsError(
-        'Enter at least 3 characters to search.'
-      )
-      setBnsResults([])
+  async function handleGenerateAiFir() {
+    if (!statement.trim() || statement.trim().length < 10) {
+      setAiError('Please enter at least 10 characters describing the incident statement.')
       return
     }
 
-    setBnsLoading(true)
-    setBnsError('')
+    if (isListening && recognitionRef.current) {
+      recognitionRef.current.stop()
+      setIsListening(false)
+    }
+
+    setAiLoading(true)
+    setAiError('')
 
     try {
-      const response = await bnsAPI.search(
-        bnsQuery.trim()
-      )
+      const response = await policeAPI.generateFir(statement.trim())
+      const resData = response.data
 
-      const results =
-        response.data?.results || []
-
-      setBnsResults(results)
-
-      if (results.length === 0) {
-        setBnsError(
-          'No matching BNS sections found.'
-        )
+      if (resData && resData.fir_data) {
+        const mappedForm = mapFirDataToFormData(resData.fir_data, resData.sanitized_incident || statement)
+        setForm(mappedForm)
+        setSupportedSections(resData.supported_sections || [])
+        setDraftGenerated(true)
+        setVerifiedByOfficer(false)
+      } else {
+        setAiError('Unable to generate AI FIR draft. Please try again.')
       }
-    } catch {
-      setBnsResults([])
-      setBnsError(
-        'Unable to search BNS sections.'
-      )
+    } catch (err: any) {
+      console.error('AI FIR Generation error:', err)
+      setAiError(err?.response?.data?.detail || 'Error connecting to AI FIR generation service.')
     } finally {
-      setBnsLoading(false)
+      setAiLoading(false)
     }
   }
 
-  function useBNSSection(
-    section: string,
-    title: string
-  ) {
-    if (!form.act1) {
-      setForm((prev) => ({
+  function updateActEntry(index: number, field: 'act' | 'section', value: string) {
+    setForm((prev) => {
+      const updated = [...(prev.actEntries || [])]
+      if (updated[index]) {
+        updated[index] = {
+          ...updated[index],
+          [field]: value,
+        }
+      }
+      return {
         ...prev,
-        act1:
-          'Bharatiya Nyaya Sanhita, 2023',
-        section1:
-          `${section} - ${title}`,
-      }))
-      return
-    }
+        actEntries: updated,
+      }
+    })
+  }
 
-    if (!form.act2) {
-      setForm((prev) => ({
-        ...prev,
-        act2:
-          'Bharatiya Nyaya Sanhita, 2023',
-        section2:
-          `${section} - ${title}`,
-      }))
-      return
-    }
-
-    if (!form.act3) {
-      setForm((prev) => ({
-        ...prev,
-        act3:
-          'Bharatiya Nyaya Sanhita, 2023',
-        section3:
-          `${section} - ${title}`,
-      }))
-      return
-    }
-
+  function addActEntry() {
     setForm((prev) => ({
       ...prev,
-      otherActs:
-        prev.otherActs
-          ? `${prev.otherActs}\nBNS ${section} - ${title}`
-          : `BNS ${section} - ${title}`,
+      actEntries: [
+        ...(prev.actEntries || []),
+        {
+          act: 'Bharatiya Nyaya Sanhita, 2023',
+          section: '',
+          source: 'manual',
+        },
+      ],
     }))
   }
 
-  function generatePreview() {
+  function removeActEntry(index: number) {
+    setForm((prev) => {
+      const updated = (prev.actEntries || []).filter((_, i) => i !== index)
+      return {
+        ...prev,
+        actEntries: updated.length > 0 ? updated : [{ act: 'Bharatiya Nyaya Sanhita, 2023', section: '', source: 'manual' }],
+      }
+    })
+  }
+
+  function getSynchronizedForm(currentForm: FormData): FormData {
+    const entries = currentForm.actEntries && currentForm.actEntries.length > 0 ? currentForm.actEntries : []
+    const act1 = entries[0]?.act || 'Bharatiya Nyaya Sanhita, 2023'
+    const section1 = entries[0]?.section || ''
+    const act2 = entries[1]?.act || ''
+    const section2 = entries[1]?.section || ''
+    const act3 = entries[2]?.act || ''
+    const section3 = entries[2]?.section || ''
+    const otherActs = entries.length > 3
+      ? entries.slice(3).map((e) => `${e.act} - ${e.section}`).filter((s) => s.trim() !== '-').join('; ')
+      : ''
+
+    return {
+      ...currentForm,
+      act1,
+      section1,
+      act2,
+      section2,
+      act3,
+      section3,
+      otherActs,
+    }
+  }
+
+  function saveDraft() {
+    const syncedForm = getSynchronizedForm(form)
     sessionStorage.setItem(
       'lawaid_fir_draft',
       JSON.stringify({
-        ...form,
+        ...syncedForm,
         statement,
       })
     )
+    setSaveStatus('Draft saved successfully!')
+    setTimeout(() => setSaveStatus(''), 3000)
+  }
 
-    window.location.href =
-      '/police/new-fir/preview'
+  function generatePreview() {
+    const syncedForm = getSynchronizedForm(form)
+    sessionStorage.setItem(
+      'lawaid_fir_draft',
+      JSON.stringify({
+        ...syncedForm,
+        statement,
+      })
+    )
+    window.location.href = '/police/new-fir/preview'
   }
 
   return (
     <>
       <Navbar />
 
-      <main className="relative min-h-screen overflow-hidden bg-[#f8f6f1]">
+      <main className="relative min-h-[calc(100vh-64px)] overflow-hidden text-[#12335B]">
 
         {/* Background */}
-        <div
-          className="absolute inset-0 bg-cover bg-center bg-fixed"
-          style={{
-            backgroundImage:
-              "url('/images/lawaid-feature-bg.png')",
-          }}
-        />
+        <div className="fixed inset-0 -z-10">
+          <img
+            src="/images/lawaid-feature-bg.png"
+            alt="LawAid legal background"
+            className="h-full w-full object-cover object-center"
+          />
+        </div>
 
-        {/* Light editorial overlay */}
-        <div className="absolute inset-0 bg-[#f8f6f1]/10" />
+        {/* Light overlay */}
+        <div className="fixed inset-0 -z-10 bg-[#f8f6f1]/10" />
 
-        <div className="relative z-10 px-5 md:px-8 py-10">
-          <div className="max-w-6xl mx-auto">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
 
-            {/* Header */}
-            <div className="mb-8">
-              <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6">
-
-                <div>
-                  <p className="text-xs font-semibold tracking-[0.25em] uppercase text-white mb-3">
-                    POLICE PORTAL · FIR DRAFTING
-                  </p>
-
-                  <h1 className="font-serif text-4xl md:text-5xl font-bold text-[#cc8427] leading-tight">
-                    Create FIR Draft
-                  </h1>
-
-                  <p className="mt-3 text-[#dca45a] text-base md:text-lg max-w-2xl">
-                    Prepare a First Information Report using
-                    the official IF1 format.
-                  </p>
-                </div>
-
-                <Link
-                  href="/police"
-                  className="inline-flex items-center justify-center gap-2 border border-[#12335B] bg-white/70 text-[#12335B] px-5 py-3 rounded-lg font-semibold hover:bg-white transition shadow-sm"
-                >
-                  <svg
-                    width="17"
-                    height="17"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path d="M19 12H5" />
-                    <path d="M12 19l-7-7 7-7" />
-                  </svg>
-
-                  Back to Dashboard
-                </Link>
-
-              </div>
-
-              <div className="mt-8 h-px bg-[#cbbf9f]" />
+          {/* Page Header */}
+          <div className="mb-8">
+            <div className="flex items-center gap-3 mb-2">
+              <span className="h-px w-10 bg-[#b98528]" />
+              <span className="text-[11px] tracking-[0.3em] uppercase text-white font-medium">
+                POLICE PORTAL
+              </span>
             </div>
 
-            {/* Draft Status */}
-            <div className="bg-white/75 backdrop-blur-sm border border-[#d9d4ca] rounded-2xl shadow-lg p-6 mb-6">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div>
+                <h1 className="font-serif text-3xl sm:text-4xl font-semibold text-[#cc8427] tracking-[-0.025em]">
+                  AI-Assisted FIR Drafting
+                </h1>
+                <p className="mt-1.5 text-[#dca45a] text-sm md:text-base font-medium">
+                  Prepare a First Information Report using the official IF1 format.
+                </p>
+              </div>
 
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+              <Link
+                href="/police"
+                className="self-start shrink-0 border border-[#d2a14b]/60 bg-[#b98528] hover:bg-[#9f7020] text-white px-5 py-2.5 rounded-full text-xs font-semibold transition shadow-sm"
+              >
+                ← Police Dashboard
+              </Link>
+            </div>
+          </div>
 
-                <div className="flex items-center gap-4">
-                  <div className="w-11 h-11 rounded-full bg-[#f3ead7] flex items-center justify-center">
-                    <svg
-                      width="21"
-                      height="21"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="#b98528"
-                      strokeWidth="1.8"
-                    >
-                      <path d="M6 3h9l3 3v15H6z" />
-                      <path d="M15 3v4h4" />
-                      <path d="M9 12h6" />
-                      <path d="M9 16h6" />
-                    </svg>
+          {/* STEP 1: STATEMENT INPUT WITH MICROPHONE & AI GENERATION TRIGGER */}
+          <section className="bg-white/85 backdrop-blur-md rounded-[20px] p-6 sm:p-7 shadow-[0_15px_40px_rgba(18,51,91,0.10)] border border-white/80 mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-serif text-xl font-bold text-[#12335B] flex items-center gap-2">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#12335B] text-white text-xs font-bold">
+                  1
+                </span>
+                Complainant / Incident Statement
+              </h2>
+
+              <button
+                type="button"
+                onClick={toggleListening}
+                disabled={!speechSupported}
+                className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-bold transition border ${
+                  isListening
+                    ? 'bg-red-100 text-red-700 border-red-300 animate-pulse'
+                    : 'bg-[#f8f6f1] text-[#b98528] border-[#b98528]/40 hover:bg-white'
+                } disabled:opacity-50`}
+                title={speechSupported ? 'Click to dictate statement via microphone' : 'Speech recognition not supported in browser'}
+              >
+                {isListening ? (
+                  <>
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-600" />
+                    Listening... (Click to Stop)
+                  </>
+                ) : (
+                  <>
+                    <span>🎙️</span>
+                    Speak Statement
+                  </>
+                )}
+              </button>
+            </div>
+
+            {speechError && (
+              <p className="mb-3 text-xs text-amber-800 bg-amber-50 p-2.5 rounded-lg border border-amber-200">
+                {speechError}
+              </p>
+            )}
+
+            {/* Quick Sample Buttons */}
+            <div className="mb-3">
+              <p className="text-xs text-[#56718f] font-semibold mb-2">Sample Statements (Click to populate):</p>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {SAMPLE_INCIDENTS.map((sample, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      setStatement(sample.text)
+                      setAiError('')
+                    }}
+                    className="text-xs bg-white border border-gray-300 hover:border-[#b98528] text-gray-700 px-3 py-1.5 rounded-lg whitespace-nowrap transition shadow-sm"
+                  >
+                    💡 {sample.title}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <textarea
+              value={statement}
+              onChange={(e) => setStatement(e.target.value)}
+              rows={6}
+              placeholder="Speak using the microphone button above or type/paste the raw complainant statement in detail. Include what happened, date/time, location, stolen property, or accused description..."
+              className="w-full border border-gray-300 rounded-xl p-3.5 text-sm outline-none focus:ring-2 focus:ring-[#12335B] transition bg-white/90 leading-relaxed"
+            />
+
+            {aiError && (
+              <p className="mt-3 text-xs text-red-600 bg-red-50 p-3 rounded-lg border border-red-200 font-medium">
+                {aiError}
+              </p>
+            )}
+
+            <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-2 border-t border-gray-100">
+              <p className="text-xs text-[#56718f]">
+                Speech transcript enters this text box. You can edit the text before generating the FIR.
+              </p>
+
+              <button
+                type="button"
+                onClick={handleGenerateAiFir}
+                disabled={aiLoading || !statement.trim()}
+                className="inline-flex items-center justify-center gap-2 bg-[#12335B] hover:bg-[#0d2949] text-white px-7 py-3 rounded-xl font-semibold text-sm transition shadow-md disabled:opacity-50"
+              >
+                {aiLoading ? (
+                  <>
+                    <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                    Extracting Facts & Generating FIR...
+                  </>
+                ) : (
+                  <>
+                    ⚡ Generate AI FIR Draft
+                  </>
+                )}
+              </button>
+            </div>
+          </section>
+
+          {/* STEP 2: POLICE OFFICER REVIEW & VERIFICATION BANNER */}
+          {draftGenerated && (
+            <section className="bg-emerald-50/90 border border-emerald-300 rounded-[20px] p-6 shadow-sm mb-8 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-emerald-200">
+                <div className="flex items-center gap-2 text-emerald-900 font-bold text-base">
+                  <span className="w-3 h-3 rounded-full bg-emerald-600 animate-pulse" />
+                  <span>AI-Generated FIR Draft — Official FIR Template</span>
+                </div>
+                {verifiedByOfficer ? (
+                  <span className="text-xs font-bold text-emerald-900 bg-emerald-200/90 px-3 py-1 rounded-full border border-emerald-400 flex items-center gap-1">
+                    ✓ Officer Verified
+                  </span>
+                ) : (
+                  <span className="text-xs font-bold text-amber-900 bg-amber-100/90 px-3 py-1 rounded-full border border-amber-300 flex items-center gap-1">
+                    AI-Generated Draft — Pending Verification
+                  </span>
+                )}
+              </div>
+
+              <p className="text-xs text-emerald-950 leading-relaxed">
+                <strong>Review Notice:</strong> Review and edit all details in the official IF1 FIR template below before final officer verification and PDF preview.
+              </p>
+
+              {supportedSections.length > 0 && (
+                <div className="pt-2">
+                  <p className="text-xs font-bold text-emerald-900 mb-1.5">
+                    Grounded BNS 2023 Sections Identified via RAG:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {supportedSections.map((sec, idx) => (
+                      <span key={idx} className="text-xs bg-emerald-700 text-white px-3 py-1 rounded-lg font-bold shadow-sm">
+                        {sec}
+                      </span>
+                    ))}
                   </div>
+                </div>
+              )}
+            </section>
+          )}
 
+          {/* STEP 3: OFFICIAL DIGITAL FIR TEMPLATE VIEW (EDITABLE) */}
+          <div className="space-y-6">
+
+            <div className="bg-[#fcfbfa] border-2 border-[#12335B]/30 rounded-[20px] p-6 sm:p-8 shadow-xl space-y-7">
+
+              {/* Template Official Header */}
+              <div className="text-center pb-6 border-b-2 border-[#12335B]/20">
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-[#12335B] text-[#b98528] font-bold text-xl mb-2">
+                  ⚖️
+                </div>
+                <h2 className="font-serif text-2xl font-bold text-[#12335B] tracking-tight uppercase">
+                  FORM F.I.R. (IF1)
+                </h2>
+                <h3 className="text-xs font-bold text-[#b98528] tracking-wider uppercase mt-0.5">
+                  FIRST INFORMATION REPORT (Under Section 173 BNSS 2023)
+                </h3>
+
+                {verifiedByOfficer ? (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-800 text-xs font-bold shadow-sm mt-2.5">
+                    <span>✓</span> Officer Verified
+                  </div>
+                ) : (
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-50 border border-amber-300 text-amber-900 text-xs font-medium shadow-sm mt-2.5">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                    <span className="font-bold">AI-Generated Draft</span>
+                    <span className="text-gray-300">|</span>
+                    <span>Review and edit the details before verification.</span>
+                  </div>
+                )}
+              </div>
+
+              {/* 1. FIR Identification */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90 space-y-3">
+                <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5">
+                  1. FIR Identification
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
                   <div>
-                    <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-[#7890a8]">
-                      Draft Status
-                    </p>
-
-                    <p className="mt-1 font-serif text-xl font-bold text-[#12335B]">
-                      New FIR Draft
-                    </p>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">District</label>
+                    <input
+                      type="text"
+                      value={form.district}
+                      onChange={(e) => updateField('district', e.target.value)}
+                      placeholder="District"
+                      className="w-full border rounded-md p-2 text-xs outline-none focus:ring-1 focus:ring-[#12335B] font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Police Station</label>
+                    <input
+                      type="text"
+                      value={form.policeStation}
+                      onChange={(e) => updateField('policeStation', e.target.value)}
+                      placeholder="Police Station"
+                      className="w-full border rounded-md p-2 text-xs outline-none focus:ring-1 focus:ring-[#12335B] font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Year</label>
+                    <input
+                      type="text"
+                      value={form.year}
+                      onChange={(e) => updateField('year', e.target.value)}
+                      placeholder="Year"
+                      className="w-full border rounded-md p-2 text-xs outline-none font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">F.I.R. No.</label>
+                    <input
+                      type="text"
+                      value={form.firNo}
+                      onChange={(e) => updateField('firNo', e.target.value)}
+                      placeholder="FIR No."
+                      className="w-full border rounded-md p-2 text-xs outline-none font-medium text-[#12335B]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Date</label>
+                    <input
+                      type="text"
+                      value={form.firDate}
+                      onChange={(e) => updateField('firDate', e.target.value)}
+                      placeholder="DD/MM/YYYY"
+                      className="w-full border rounded-md p-2 text-xs outline-none font-medium"
+                    />
                   </div>
                 </div>
+              </div>
 
-                <div className="flex gap-3">
+              {/* 2. Acts and Sections (Dynamic Entries) */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90 space-y-4">
+                <div className="flex items-center justify-between border-b pb-1.5">
+                  <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider">
+                    2. Acts & Sections (Grounded BNS 2023 Provisions)
+                  </h4>
+                  <span className="text-[10px] text-gray-500 font-medium">
+                    {form.actEntries?.length || 0} {form.actEntries?.length === 1 ? 'Entry' : 'Entries'}
+                  </span>
+                </div>
 
+                <div className="space-y-3">
+                  {(form.actEntries || []).map((entry, idx) => (
+                    <div key={idx} className="bg-gray-50/80 border border-gray-200 rounded-lg p-3 relative group">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold text-[#12335B] uppercase tracking-wider">
+                            Entry ({idx + 1})
+                          </span>
+                          {entry.source === 'ai' ? (
+                            <span className="text-[9px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-medium">
+                              AI Suggested
+                            </span>
+                          ) : (
+                            <span className="text-[9px] bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded font-medium">
+                              Officer Added
+                            </span>
+                          )}
+                        </div>
+
+                        {(form.actEntries?.length || 0) > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeActEntry(idx)}
+                            className="text-xs text-red-600 hover:text-red-800 font-semibold px-2 py-0.5 rounded hover:bg-red-50 transition"
+                            title="Remove this entry"
+                          >
+                            🗑 Remove
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                            Act ({idx + 1})
+                          </label>
+                          <input
+                            type="text"
+                            value={entry.act}
+                            onChange={(e) => updateActEntry(idx, 'act', e.target.value)}
+                            placeholder="Bharatiya Nyaya Sanhita, 2023"
+                            className="w-full border border-gray-300 rounded-md p-2 text-xs outline-none focus:ring-1 focus:ring-[#12335B] bg-white font-medium"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">
+                            Section(s) ({idx + 1})
+                          </label>
+                          <input
+                            type="text"
+                            value={entry.section}
+                            onChange={(e) => updateActEntry(idx, 'section', e.target.value)}
+                            placeholder="Section e.g. 304 - Snatching"
+                            className="w-full border border-gray-300 rounded-md p-2 text-xs outline-none focus:ring-1 focus:ring-[#12335B] bg-white font-bold text-[#12335B]"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="pt-1">
                   <button
                     type="button"
-                    disabled
-                    className="border border-[#d5d9df] bg-white/60 text-[#9aa8b8] px-5 py-2.5 rounded-lg font-semibold cursor-not-allowed"
+                    onClick={addActEntry}
+                    className="w-full sm:w-auto border border-dashed border-[#12335B]/50 bg-white hover:bg-[#12335B]/5 text-[#12335B] px-4 py-2 rounded-lg text-xs font-semibold transition flex items-center justify-center gap-1.5 shadow-sm"
                   >
-                    Save Draft
+                    <span>+</span> Add Act / Section
                   </button>
-
-                  <button
-                    type="button"
-                    onClick={generatePreview}
-                    className="bg-[#b98528] text-white px-5 py-2.5 rounded-lg font-semibold hover:bg-[#9f7020] transition shadow-sm"
-                  >
-                    Generate Draft
-                  </button>
-
                 </div>
               </div>
+
+              {/* 3. Occurrence of Offence */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90 space-y-3">
+                <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5">
+                  3. Occurrence of Offence
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Day of Occurrence</label>
+                    <input
+                      type="text"
+                      value={form.occurrenceDay}
+                      onChange={(e) => updateField('occurrenceDay', e.target.value)}
+                      placeholder="Day (e.g. Monday)"
+                      className="w-full border rounded-md p-2 text-xs outline-none font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Date of Occurrence</label>
+                    <input
+                      type="text"
+                      value={form.occurrenceDate}
+                      onChange={(e) => updateField('occurrenceDate', e.target.value)}
+                      placeholder="Date (DD/MM/YYYY)"
+                      className="w-full border rounded-md p-2 text-xs outline-none font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Time of Occurrence</label>
+                    <input
+                      type="text"
+                      value={form.occurrenceTime}
+                      onChange={(e) => updateField('occurrenceTime', e.target.value)}
+                      placeholder="Time (e.g. 20:00)"
+                      className="w-full border rounded-md p-2 text-xs outline-none font-medium"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* 4. Type of Information */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90">
+                <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5 mb-3">
+                  4. Type of Information
+                </h4>
+                <div className="flex gap-4 items-center">
+                  <label className="flex items-center gap-2 text-xs font-semibold">
+                    <input
+                      type="radio"
+                      name="infoType"
+                      value="Written"
+                      checked={form.informationType === 'Written'}
+                      onChange={() => updateField('informationType', 'Written')}
+                    />
+                    Written
+                  </label>
+                  <label className="flex items-center gap-2 text-xs font-semibold">
+                    <input
+                      type="radio"
+                      name="infoType"
+                      value="Oral"
+                      checked={form.informationType === 'Oral'}
+                      onChange={() => updateField('informationType', 'Oral')}
+                    />
+                    Oral
+                  </label>
+                </div>
+              </div>
+
+              {/* 5. Place of Occurrence */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90 space-y-3">
+                <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5">
+                  5. Place of Occurrence
+                </h4>
+                <div>
+                  <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Address / Location</label>
+                  <input
+                    type="text"
+                    value={form.placeAddress}
+                    onChange={(e) => updateField('placeAddress', e.target.value)}
+                    placeholder="Place Address"
+                    className="w-full border rounded-md p-2 text-xs outline-none font-medium"
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Direction & Distance from PS</label>
+                    <input
+                      type="text"
+                      value={form.placeDirection}
+                      onChange={(e) => updateField('placeDirection', e.target.value)}
+                      placeholder="Direction & Distance"
+                      className="w-full border rounded-md p-2 text-xs outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Beat No.</label>
+                    <input
+                      type="text"
+                      value={form.beatNo}
+                      onChange={(e) => updateField('beatNo', e.target.value)}
+                      placeholder="Beat No."
+                      className="w-full border rounded-md p-2 text-xs outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* 6. Complainant / Informant */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90 space-y-3">
+                <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5">
+                  6. Complainant / Informant Details
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Complainant Name</label>
+                    <input
+                      type="text"
+                      value={form.complainantName}
+                      onChange={(e) => updateField('complainantName', e.target.value)}
+                      placeholder="Complainant Name"
+                      className="w-full border rounded-md p-2 text-xs outline-none font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Father / Husband Name</label>
+                    <input
+                      type="text"
+                      value={form.fatherHusbandName}
+                      onChange={(e) => updateField('fatherHusbandName', e.target.value)}
+                      placeholder="Father / Husband Name"
+                      className="w-full border rounded-md p-2 text-xs outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Nationality</label>
+                    <input
+                      type="text"
+                      value={form.nationality}
+                      onChange={(e) => updateField('nationality', e.target.value)}
+                      placeholder="Nationality"
+                      className="w-full border rounded-md p-2 text-xs outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Address</label>
+                    <input
+                      type="text"
+                      value={form.complainantAddress}
+                      onChange={(e) => updateField('complainantAddress', e.target.value)}
+                      placeholder="Complainant Address"
+                      className="w-full border rounded-md p-2 text-xs outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* 7. Accused Details */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90">
+                <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5 mb-2">
+                  7. Details of Known / Suspected / Unknown Accused
+                </h4>
+                <input
+                  type="text"
+                  value={form.accusedDetails}
+                  onChange={(e) => updateField('accusedDetails', e.target.value)}
+                  placeholder="Accused Details"
+                  className="w-full border rounded-md p-2 text-xs outline-none font-medium"
+                />
+              </div>
+
+              {/* 8. Property Details & Value */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90 space-y-3">
+                <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5">
+                  8. Particulars of Property Stolen / Involved & Value
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Property Stolen / Involved</label>
+                    <input
+                      type="text"
+                      value={form.propertyDetails}
+                      onChange={(e) => updateField('propertyDetails', e.target.value)}
+                      placeholder="Particulars of Property"
+                      className="w-full border rounded-md p-2 text-xs outline-none font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Total Estimated Value (₹)</label>
+                    <input
+                      type="text"
+                      value={form.propertyValue}
+                      onChange={(e) => updateField('propertyValue', e.target.value)}
+                      placeholder="Estimated Value"
+                      className="w-full border rounded-md p-2 text-xs outline-none font-medium"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* 12. F.I.R. Contents Narrative */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90">
+                <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5 mb-2">
+                  12. F.I.R. Contents Narrative (AI-Generated Statement Summary)
+                </h4>
+                <textarea
+                  value={form.firContents}
+                  onChange={(e) => updateField('firContents', e.target.value)}
+                  rows={6}
+                  placeholder="Full formal narrative of the First Information Report..."
+                  className="w-full border rounded-lg p-3 text-xs outline-none leading-relaxed bg-white font-medium"
+                />
+              </div>
+
+              {/* 13 & 15. Action Taken & Officer Details */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90 space-y-3">
+                <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5">
+                  13 & 15. Action Taken & Officer Details
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Action Taken</label>
+                    <input
+                      type="text"
+                      value={form.actionTaken}
+                      onChange={(e) => updateField('actionTaken', e.target.value)}
+                      placeholder="Action Taken"
+                      className="w-full border rounded-md p-2 text-xs outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Officer Name</label>
+                    <input
+                      type="text"
+                      value={form.officerName}
+                      onChange={(e) => updateField('officerName', e.target.value)}
+                      placeholder="Officer Name"
+                      className="w-full border rounded-md p-2 text-xs outline-none font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Rank & Badge No.</label>
+                    <input
+                      type="text"
+                      value={form.officerRank}
+                      onChange={(e) => updateField('officerRank', e.target.value)}
+                      placeholder="Rank / Badge No."
+                      className="w-full border rounded-md p-2 text-xs outline-none font-medium"
+                    />
+                  </div>
+                </div>
+              </div>
+
             </div>
 
-            {/* Statement Input */}
-            <section className="bg-white/75 backdrop-blur-sm border border-[#d9d4ca] rounded-2xl shadow-lg p-6 md:p-7 mb-6">
+            {/* STEP 4: VERIFICATION & FINAL ACTION CONTROLS */}
+            <section className="bg-white/85 backdrop-blur-md rounded-[20px] p-6 shadow-md border border-white/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <label className="flex items-center gap-3 cursor-pointer text-xs text-[#12335B] font-semibold">
+                <input
+                  type="checkbox"
+                  checked={verifiedByOfficer}
+                  onChange={(e) => setVerifiedByOfficer(e.target.checked)}
+                  className="w-4 h-4 rounded text-[#12335B] focus:ring-[#12335B]"
+                />
+                <span>I confirm that I have reviewed, edited, and verified this FIR draft in accordance with BNSS Section 173.</span>
+              </label>
 
-              <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-5">
+              <div className="flex flex-wrap items-center gap-3 shrink-0">
+                {saveStatus && (
+                  <span className="text-xs text-emerald-600 font-semibold animate-pulse">
+                    {saveStatus}
+                  </span>
+                )}
 
-                <div>
-                  <p className="text-[11px] font-semibold tracking-[0.2em] uppercase text-[#b98528] mb-2">
-                    INCIDENT INFORMATION
-                  </p>
-
-                  <h2 className="font-serif text-2xl font-bold text-[#12335B]">
-                    Statement Input
-                  </h2>
-
-                  <p className="text-sm text-[#56718f] mt-1">
-                    Enter the incident statement to assist FIR drafting.
-                  </p>
-                </div>
-
-                <Link
-                  href="/bns-search"
-                  className="text-sm font-semibold text-[#12335B] hover:text-[#b98528] transition"
-                >
-                  Search BNS Sections →
-                </Link>
-
-              </div>
-
-              <textarea
-                rows={6}
-                value={statement}
-                onChange={(e) =>
-                  setStatement(e.target.value)
-                }
-                placeholder="Enter the complainant/informant statement or incident description..."
-                className="w-full bg-white/80 border border-[#cfd3d8] rounded-xl p-4 text-[#315b82] placeholder:text-[#8aa0b5] resize-y focus:outline-none focus:ring-2 focus:ring-[#b98528]/30 focus:border-[#b98528] transition"
-              />
-
-              <div className="mt-4 flex flex-col sm:flex-row gap-3">
-
-                <label className="inline-flex items-center justify-center gap-2 border border-[#cfd3d8] bg-white/70 rounded-lg px-4 py-2.5 cursor-pointer text-sm font-medium text-[#12335B] hover:bg-white transition">
-
-                  <svg
-                    width="17"
-                    height="17"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="#b98528"
-                    strokeWidth="1.8"
+                {draftGenerated && (
+                  <button
+                    type="button"
+                    onClick={() => setShowRegenerateModal(true)}
+                    disabled={aiLoading || !statement.trim()}
+                    className="px-4 py-2.5 rounded-xl border border-[#12335B] text-xs font-semibold text-[#12335B] hover:bg-[#12335B]/5 transition disabled:opacity-50"
                   >
-                    <path d="M12 2v10" />
-                    <path d="M8 6a4 4 0 0 1 8 0v6a4 4 0 0 1-8 0z" />
-                    <path d="M5 12a7 7 0 0 0 14 0" />
-                    <path d="M12 19v3" />
-                    <path d="M8 22h8" />
-                  </svg>
-
-                  Upload Recorded Statement
-
-                  <input
-                    type="file"
-                    accept="audio/*"
-                    className="hidden"
-                    onChange={(e) =>
-                      setAudioFile(
-                        e.target.files?.[0] || null
-                      )
-                    }
-                  />
-                </label>
-
-                {audioFile && (
-                  <div className="flex items-center text-sm text-[#56718f] px-2">
-                    {audioFile.name}
-                  </div>
+                    Regenerate AI Draft
+                  </button>
                 )}
 
                 <button
                   type="button"
-                  className="bg-[#eef0f2] text-[#12335B] px-5 py-2.5 rounded-lg font-semibold hover:bg-[#e3e6e9] transition"
+                  onClick={saveDraft}
+                  className="px-4 py-2.5 rounded-xl border border-[#12335B] text-xs font-semibold text-[#12335B] hover:bg-[#12335B]/5 transition"
                 >
-                  Extract Information
+                  Save Draft
                 </button>
 
-              </div>
-            </section>
-
-            {/* Section 1 */}
-            <section className="form-section">
-              <SectionTitle
-                number="1"
-                title="FIR Identification"
-              />
-
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-
-                <Input
-                  label="District"
-                  value={form.district}
-                  onChange={(v) =>
-                    updateField(
-                      'district',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Police Station"
-                  value={form.policeStation}
-                  onChange={(v) =>
-                    updateField(
-                      'policeStation',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Year"
-                  value={form.year}
-                  onChange={(v) =>
-                    updateField(
-                      'year',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="F.I.R. No."
-                  value={form.firNo}
-                  onChange={(v) =>
-                    updateField(
-                      'firNo',
-                      v
-                    )
-                  }
-                />
-
-              </div>
-
-              <div className="mt-4 max-w-xs">
-                <Input
-                  label="Date"
-                  type="date"
-                  value={form.firDate}
-                  onChange={(v) =>
-                    updateField(
-                      'firDate',
-                      v
-                    )
-                  }
-                />
-              </div>
-            </section>
-
-            {/* Section 2 */}
-            <section className="form-section">
-
-              <SectionTitle
-                number="2"
-                title="Act(s) and Section(s)"
-              />
-
-              <div className="space-y-4">
-
-                <ActRow
-                  number="1"
-                  act={form.act1}
-                  section={form.section1}
-                  onActChange={(v) =>
-                    updateField(
-                      'act1',
-                      v
-                    )
-                  }
-                  onSectionChange={(v) =>
-                    updateField(
-                      'section1',
-                      v
-                    )
-                  }
-                />
-
-                <ActRow
-                  number="2"
-                  act={form.act2}
-                  section={form.section2}
-                  onActChange={(v) =>
-                    updateField(
-                      'act2',
-                      v
-                    )
-                  }
-                  onSectionChange={(v) =>
-                    updateField(
-                      'section2',
-                      v
-                    )
-                  }
-                />
-
-                <ActRow
-                  number="3"
-                  act={form.act3}
-                  section={form.section3}
-                  onActChange={(v) =>
-                    updateField(
-                      'act3',
-                      v
-                    )
-                  }
-                  onSectionChange={(v) =>
-                    updateField(
-                      'section3',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Other Acts & Sections"
-                  value={form.otherActs}
-                  onChange={(v) =>
-                    updateField(
-                      'otherActs',
-                      v
-                    )
-                  }
-                />
-
-              </div>
-
-              {/* BNS Search */}
-              <div className="mt-7 rounded-xl bg-[#f8f6f1]/80 border border-[#ddd7cb] p-5">
-
-                <div className="flex items-start gap-3">
-
-                  <div className="w-9 h-9 shrink-0 rounded-lg bg-[#f1e6cf] flex items-center justify-center">
-                    <svg
-                      width="18"
-                      height="18"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="#b98528"
-                      strokeWidth="1.8"
-                    >
-                      <circle
-                        cx="11"
-                        cy="11"
-                        r="6"
-                      />
-                      <path d="m16 16 5 5" />
-                    </svg>
-                  </div>
-
-                  <div>
-                    <h3 className="font-serif text-lg font-bold text-[#12335B]">
-                      BNS Section Search
-                    </h3>
-
-                    <p className="text-sm text-[#56718f] mt-1">
-                      Search relevant BNS sections while preparing the FIR draft.
-                    </p>
-                  </div>
-
-                </div>
-
-                <div className="mt-4 flex flex-col sm:flex-row gap-3">
-
-                  <input
-                    type="text"
-                    value={bnsQuery}
-                    onChange={(e) =>
-                      setBnsQuery(
-                        e.target.value
-                      )
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        searchBNS()
-                      }
-                    }}
-                    placeholder="Example: cheating, intimidation..."
-                    className="flex-1 bg-white border border-[#cfd3d8] rounded-lg px-4 py-2.5 text-[#315b82] placeholder:text-[#8aa0b5] focus:outline-none focus:ring-2 focus:ring-[#b98528]/30 focus:border-[#b98528]"
-                  />
-
-                  <button
-                    type="button"
-                    onClick={searchBNS}
-                    disabled={bnsLoading}
-                    className="bg-[#12335B] text-white px-5 py-2.5 rounded-lg font-semibold hover:bg-[#0d2949] transition disabled:opacity-50"
-                  >
-                    {bnsLoading
-                      ? 'Searching...'
-                      : 'Search BNS'}
-                  </button>
-
-                </div>
-
-                {bnsError && (
-                  <p className="mt-3 text-sm text-red-600">
-                    {bnsError}
-                  </p>
-                )}
-
-                {bnsResults.length > 0 && (
-                  <div className="mt-4 space-y-3">
-
-                    {bnsResults.map(
-                      (result) => (
-                        <div
-                          key={`${result.section}-${result.title}`}
-                          className="bg-white/90 border border-[#d9d4ca] rounded-xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3"
-                        >
-
-                          <div>
-                            <p className="text-sm font-semibold text-[#b98528]">
-                              Section {result.section}
-                            </p>
-
-                            <p className="text-sm text-[#12335B] font-medium mt-1">
-                              {result.title}
-                            </p>
-
-                            <p className="text-xs text-[#7890a8] mt-1">
-                              Similarity: {result.similarity}
-                            </p>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              useBNSSection(
-                                result.section,
-                                result.title
-                              )
-                            }
-                            className="border border-[#12335B] text-[#12335B] px-4 py-2 rounded-lg text-sm font-semibold hover:bg-[#12335B] hover:text-white transition"
-                          >
-                            Use Section
-                          </button>
-
-                        </div>
-                      )
-                    )}
-
-                  </div>
-                )}
-
-              </div>
-            </section>
-
-            {/* Section 3 */}
-            <section className="form-section">
-
-              <SectionTitle
-                number="3"
-                title="Occurrence of Offence"
-              />
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-
-                <Input
-                  label="Day"
-                  value={form.occurrenceDay}
-                  onChange={(v) =>
-                    updateField(
-                      'occurrenceDay',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Date"
-                  type="date"
-                  value={form.occurrenceDate}
-                  onChange={(v) =>
-                    updateField(
-                      'occurrenceDate',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Time"
-                  type="time"
-                  value={form.occurrenceTime}
-                  onChange={(v) =>
-                    updateField(
-                      'occurrenceTime',
-                      v
-                    )
-                  }
-                />
-
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-
-                <Input
-                  label="Information Received at P.S. — Date"
-                  type="date"
-                  value={form.informationDate}
-                  onChange={(v) =>
-                    updateField(
-                      'informationDate',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Information Received at P.S. — Time"
-                  type="time"
-                  value={form.informationTime}
-                  onChange={(v) =>
-                    updateField(
-                      'informationTime',
-                      v
-                    )
-                  }
-                />
-
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-
-                <Input
-                  label="General Diary Reference — Entry No(s)"
-                  value={form.gdEntry}
-                  onChange={(v) =>
-                    updateField(
-                      'gdEntry',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="General Diary Reference — Time"
-                  type="time"
-                  value={form.gdTime}
-                  onChange={(v) =>
-                    updateField(
-                      'gdTime',
-                      v
-                    )
-                  }
-                />
-
-              </div>
-            </section>
-
-            {/* Section 4 */}
-            <section className="form-section">
-
-              <SectionTitle
-                number="4"
-                title="Type of Information"
-              />
-
-              <div className="flex flex-wrap gap-4">
-
-                <Radio
-                  label="Written"
-                  checked={
-                    form.informationType ===
-                    'Written'
-                  }
-                  onChange={() =>
-                    updateField(
-                      'informationType',
-                      'Written'
-                    )
-                  }
-                />
-
-                <Radio
-                  label="Oral"
-                  checked={
-                    form.informationType ===
-                    'Oral'
-                  }
-                  onChange={() =>
-                    updateField(
-                      'informationType',
-                      'Oral'
-                    )
-                  }
-                />
-
-              </div>
-            </section>
-
-            {/* Section 5 */}
-            <section className="form-section">
-
-              <SectionTitle
-                number="5"
-                title="Place of Occurrence"
-              />
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
-                <Input
-                  label="Direction and Distance from P.S."
-                  value={form.placeDirection}
-                  onChange={(v) =>
-                    updateField(
-                      'placeDirection',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Beat No."
-                  value={form.beatNo}
-                  onChange={(v) =>
-                    updateField(
-                      'beatNo',
-                      v
-                    )
-                  }
-                />
-
-              </div>
-
-              <div className="mt-4">
-                <TextArea
-                  label="Address"
-                  value={form.placeAddress}
-                  onChange={(v) =>
-                    updateField(
-                      'placeAddress',
-                      v
-                    )
-                  }
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-
-                <Input
-                  label="Other Police Station (if outside limits)"
-                  value={form.outsidePoliceStation}
-                  onChange={(v) =>
-                    updateField(
-                      'outsidePoliceStation',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="District"
-                  value={form.outsideDistrict}
-                  onChange={(v) =>
-                    updateField(
-                      'outsideDistrict',
-                      v
-                    )
-                  }
-                />
-
-              </div>
-            </section>
-
-            {/* Section 6 */}
-            <section className="form-section">
-
-              <SectionTitle
-                number="6"
-                title="Complainant / Informant"
-              />
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
-                <Input
-                  label="Name"
-                  value={form.complainantName}
-                  onChange={(v) =>
-                    updateField(
-                      'complainantName',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Father's / Husband's Name"
-                  value={form.fatherHusbandName}
-                  onChange={(v) =>
-                    updateField(
-                      'fatherHusbandName',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Date / Year of Birth"
-                  value={form.dob}
-                  onChange={(v) =>
-                    updateField(
-                      'dob',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Nationality"
-                  value={form.nationality}
-                  onChange={(v) =>
-                    updateField(
-                      'nationality',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Passport No."
-                  value={form.passportNo}
-                  onChange={(v) =>
-                    updateField(
-                      'passportNo',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Passport Date of Issue"
-                  type="date"
-                  value={form.passportDate}
-                  onChange={(v) =>
-                    updateField(
-                      'passportDate',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Passport Place of Issue"
-                  value={form.passportPlace}
-                  onChange={(v) =>
-                    updateField(
-                      'passportPlace',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Occupation"
-                  value={form.occupation}
-                  onChange={(v) =>
-                    updateField(
-                      'occupation',
-                      v
-                    )
-                  }
-                />
-
-              </div>
-
-              <div className="mt-4">
-                <TextArea
-                  label="Address"
-                  value={form.complainantAddress}
-                  onChange={(v) =>
-                    updateField(
-                      'complainantAddress',
-                      v
-                    )
-                  }
-                />
-              </div>
-            </section>
-
-            {/* Section 7 */}
-            <section className="form-section">
-
-              <SectionTitle
-                number="7"
-                title="Known / Suspected / Unknown / Accused Details"
-              />
-
-              <TextArea
-                label="Full particulars"
-                rows={7}
-                value={form.accusedDetails}
-                onChange={(v) =>
-                  updateField(
-                    'accusedDetails',
-                    v
-                  )
-                }
-                placeholder="Enter details of the known, suspected or unknown accused..."
-              />
-
-              <p className="text-xs text-[#7890a8] mt-2">
-                Attach a separate sheet if necessary.
-              </p>
-
-            </section>
-
-            {/* Section 8 */}
-            <section className="form-section">
-
-              <SectionTitle
-                number="8"
-                title="Reason for Delay in Reporting"
-              />
-
-              <TextArea
-                label="Reason for delay"
-                rows={5}
-                value={form.delayReason}
-                onChange={(v) =>
-                  updateField(
-                    'delayReason',
-                    v
-                  )
-                }
-              />
-
-            </section>
-
-            {/* Section 9 */}
-            <section className="form-section">
-
-              <SectionTitle
-                number="9"
-                title="Particulars of Property Stolen / Involved"
-              />
-
-              <TextArea
-                label="Property details"
-                rows={6}
-                value={form.propertyDetails}
-                onChange={(v) =>
-                  updateField(
-                    'propertyDetails',
-                    v
-                  )
-                }
-                placeholder="Describe the property stolen or otherwise involved..."
-              />
-
-              <p className="text-xs text-[#7890a8] mt-2">
-                Attach a separate sheet if necessary.
-              </p>
-
-            </section>
-
-            {/* Section 10 */}
-            <section className="form-section">
-
-              <SectionTitle
-                number="10"
-                title="Total Value of Property Stolen / Involved"
-              />
-
-              <Input
-                label="Total Value"
-                placeholder="₹"
-                value={form.propertyValue}
-                onChange={(v) =>
-                  updateField(
-                    'propertyValue',
-                    v
-                  )
-                }
-              />
-
-            </section>
-
-            {/* Section 11 */}
-            <section className="form-section">
-
-              <SectionTitle
-                number="11"
-                title="Inquest Report / U.D. Case No."
-              />
-
-              <TextArea
-                label="Details, if any"
-                rows={4}
-                value={form.inquestDetails}
-                onChange={(v) =>
-                  updateField(
-                    'inquestDetails',
-                    v
-                  )
-                }
-              />
-
-            </section>
-
-            {/* Section 12 */}
-            <section className="form-section">
-
-              <SectionTitle
-                number="12"
-                title="F.I.R. Contents"
-              />
-
-              <TextArea
-                label="F.I.R. Contents"
-                rows={12}
-                value={form.firContents}
-                onChange={(v) =>
-                  updateField(
-                    'firContents',
-                    v
-                  )
-                }
-                placeholder="Enter or generate the detailed FIR contents..."
-              />
-
-              <p className="text-xs text-[#7890a8] mt-2">
-                Attach separate sheets if required.
-              </p>
-
-            </section>
-
-            {/* Section 13 */}
-            <section className="form-section">
-
-              <SectionTitle
-                number="13"
-                title="Action Taken"
-              />
-
-              <TextArea
-                label="Action Taken"
-                rows={7}
-                value={form.actionTaken}
-                onChange={(v) =>
-                  updateField(
-                    'actionTaken',
-                    v
-                  )
-                }
-                placeholder="Enter the information required for this section of the official FIR format..."
-              />
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-
-                <Input
-                  label="Rank"
-                  value={form.officerRank}
-                  onChange={(v) =>
-                    updateField(
-                      'officerRank',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Officer Name"
-                  value={form.officerName}
-                  onChange={(v) =>
-                    updateField(
-                      'officerName',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Officer No."
-                  value={form.officerNo}
-                  onChange={(v) =>
-                    updateField(
-                      'officerNo',
-                      v
-                    )
-                  }
-                />
-
-              </div>
-            </section>
-
-            {/* Section 14 */}
-            <section className="form-section">
-
-              <SectionTitle
-                number="14"
-                title="Complainant / Informant Signature"
-              />
-
-              <div className="border-2 border-dashed border-[#d4cec1] rounded-xl bg-[#faf9f6]/70 p-10 text-center text-[#7890a8]">
-
-                <svg
-                  className="mx-auto mb-3"
-                  width="28"
-                  height="28"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="#b98528"
-                  strokeWidth="1.6"
+                <button
+                  type="button"
+                  onClick={() => {
+                    sessionStorage.removeItem('lawaid_fir_draft')
+                    setForm(initialForm)
+                    setStatement('')
+                    setDraftGenerated(false)
+                    setVerifiedByOfficer(false)
+                  }}
+                  className="px-4 py-2.5 rounded-xl border border-gray-300 text-xs font-semibold text-gray-600 hover:bg-gray-100 transition"
                 >
-                  <path d="M4 20c3-4 6-5 9-8l5-5a2 2 0 0 0-3-3l-5 5c-3 3-4 6-8 9" />
-                  <path d="M14 5l5 5" />
-                  <path d="M3 21h18" />
-                </svg>
+                  Reset Form
+                </button>
 
-                <p className="text-sm font-medium">
-                  Signature / Thumb-impression area
+                <button
+                  type="button"
+                  onClick={generatePreview}
+                  disabled={!verifiedByOfficer}
+                  className="bg-[#12335B] hover:bg-[#0d2949] text-white px-6 py-2.5 rounded-xl text-xs font-semibold transition shadow-md disabled:opacity-50"
+                >
+                  Preview FIR →
+                </button>
+              </div>
+            </section>
+
+          </div>
+
+        </div>
+      </main>
+
+      {/* REGENERATE CONFIRMATION MODAL */}
+      {showRegenerateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-gray-200 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-lg shrink-0">
+                ⚠️
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-[#12335B]">
+                  Regenerate AI Draft?
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Re-analyzing complainant statement
                 </p>
-
-              </div>
-            </section>
-
-            {/* Section 15 */}
-            <section className="form-section">
-
-              <SectionTitle
-                number="15"
-                title="Date & Time of Despatch to Court"
-              />
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
-                <Input
-                  label="Date"
-                  type="date"
-                  value={form.dispatchDate}
-                  onChange={(v) =>
-                    updateField(
-                      'dispatchDate',
-                      v
-                    )
-                  }
-                />
-
-                <Input
-                  label="Time"
-                  type="time"
-                  value={form.dispatchTime}
-                  onChange={(v) =>
-                    updateField(
-                      'dispatchTime',
-                      v
-                    )
-                  }
-                />
-
-              </div>
-            </section>
-
-            {/* Bottom Actions */}
-            <div className="bg-white/75 backdrop-blur-sm border border-[#d9d4ca] rounded-2xl shadow-lg p-6 mt-6 mb-10">
-
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
-
-                <div>
-                  <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-[#b98528]">
-                    FINAL STEP
-                  </p>
-
-                  <p className="font-serif text-xl font-bold text-[#12335B] mt-1">
-                    FIR Draft
-                  </p>
-
-                  <p className="text-sm text-[#56718f] mt-1">
-                    Review the information before generating the draft.
-                  </p>
-                </div>
-
-                <div className="flex gap-3">
-
-                  <button
-                    type="button"
-                    disabled
-                    className="border border-[#d5d9df] bg-white/60 text-[#9aa8b8] px-6 py-3 rounded-lg font-semibold cursor-not-allowed"
-                  >
-                    Save Draft
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={generatePreview}
-                    className="bg-[#b98528] text-white px-6 py-3 rounded-lg font-semibold hover:bg-[#9f7020] transition shadow-sm"
-                  >
-                    Generate FIR Draft
-                  </button>
-
-                </div>
-
               </div>
             </div>
 
+            <p className="text-xs text-gray-700 leading-relaxed bg-gray-50 p-3 rounded-xl border border-gray-200">
+              This will replace the current AI-generated FIR fields with a new draft based on the incident statement. Any manual changes to the current draft may be replaced.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowRegenerateModal(false)}
+                className="px-4 py-2 rounded-xl border border-gray-300 text-xs font-semibold text-gray-700 hover:bg-gray-100 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowRegenerateModal(false)
+                  handleGenerateAiFir()
+                }}
+                className="px-5 py-2 rounded-xl bg-[#12335B] hover:bg-[#0d2949] text-white text-xs font-semibold transition shadow-sm"
+              >
+                Regenerate
+              </button>
+            </div>
           </div>
         </div>
-      </main>
+      )}
     </>
-  )
-}
-
-function SectionTitle({
-  number,
-  title,
-}: {
-  number: string
-  title: string
-}) {
-  return (
-    <div className="flex items-center gap-4 mb-6 pb-4 border-b border-[#d8d1c5]">
-
-      <div className="w-10 h-10 shrink-0 rounded-full bg-[#12335B] text-white flex items-center justify-center font-bold shadow-sm">
-        {number}
-      </div>
-
-      <div>
-        <p className="text-[10px] uppercase tracking-[0.18em] text-[#b98528] font-semibold mb-0.5">
-          FIR SECTION
-        </p>
-
-        <h2 className="font-serif text-xl md:text-2xl font-bold text-[#12335B]">
-          {title}
-        </h2>
-      </div>
-
-    </div>
-  )
-}
-
-function Input({
-  label,
-  type = 'text',
-  placeholder = '',
-  value,
-  onChange,
-}: {
-  label: string
-  type?: string
-  placeholder?: string
-  value: string
-  onChange: (value: string) => void
-}) {
-  return (
-    <div>
-      <label className="block text-sm font-semibold text-[#315b82] mb-2">
-        {label}
-      </label>
-
-      <input
-        type={type}
-        value={value}
-        placeholder={placeholder}
-        onChange={(e) =>
-          onChange(e.target.value)
-        }
-        className="w-full bg-white/80 border border-[#cfd3d8] rounded-lg px-3 py-2.5 text-[#315b82] placeholder:text-[#8aa0b5] focus:outline-none focus:ring-2 focus:ring-[#b98528]/30 focus:border-[#b98528] transition"
-      />
-    </div>
-  )
-}
-
-function TextArea({
-  label,
-  rows = 5,
-  placeholder = '',
-  value,
-  onChange,
-}: {
-  label: string
-  rows?: number
-  placeholder?: string
-  value: string
-  onChange: (value: string) => void
-}) {
-  return (
-    <div>
-      <label className="block text-sm font-semibold text-[#315b82] mb-2">
-        {label}
-      </label>
-
-      <textarea
-        rows={rows}
-        value={value}
-        placeholder={placeholder}
-        onChange={(e) =>
-          onChange(e.target.value)
-        }
-        className="w-full bg-white/80 border border-[#cfd3d8] rounded-lg px-3 py-3 text-[#315b82] placeholder:text-[#8aa0b5] resize-y focus:outline-none focus:ring-2 focus:ring-[#b98528]/30 focus:border-[#b98528] transition"
-      />
-    </div>
-  )
-}
-
-function ActRow({
-  number,
-  act,
-  section,
-  onActChange,
-  onSectionChange,
-}: {
-  number: string
-  act: string
-  section: string
-  onActChange: (value: string) => void
-  onSectionChange: (value: string) => void
-}) {
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-xl bg-[#faf9f6]/70 border border-[#e0dbd1]">
-
-      <Input
-        label={`Act ${number}`}
-        value={act}
-        onChange={onActChange}
-      />
-
-      <Input
-        label={`Section(s) ${number}`}
-        value={section}
-        onChange={onSectionChange}
-      />
-
-    </div>
-  )
-}
-
-function Radio({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string
-  checked: boolean
-  onChange: () => void
-}) {
-  return (
-    <label
-      className={`flex items-center gap-3 cursor-pointer border rounded-lg px-5 py-3 transition ${
-        checked
-          ? 'border-[#b98528] bg-[#f5eddc] text-[#12335B]'
-          : 'border-[#d3d7dc] bg-white/70 text-[#56718f] hover:bg-white'
-      }`}
-    >
-
-      <input
-        type="radio"
-        checked={checked}
-        onChange={onChange}
-        className="accent-[#b98528]"
-      />
-
-      <span className="text-sm font-semibold">
-        {label}
-      </span>
-
-    </label>
   )
 }

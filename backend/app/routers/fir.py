@@ -312,7 +312,21 @@ async def understand_fir(file: UploadFile = File(...)):
         elif app_status == "uncertain":
             charges_uncertain.append(entry)
 
-    active_titles = [c["title"] for c in charges_supported if c.get("title")] or [c["title"] for c in charges_uncertain if c.get("title")]
+    def _dedupe_charges(charge_list):
+        seen = set()
+        deduped = []
+        for c in charge_list:
+            sec = c.get("section", "").strip()
+            if sec and sec not in seen:
+                seen.add(sec)
+                deduped.append(c)
+        return deduped
+
+    display_charges = _dedupe_charges(charges_supported)
+    if not display_charges and charges_uncertain:
+        display_charges = _dedupe_charges(charges_uncertain)
+
+    active_titles = [c["title"] for c in display_charges if c.get("title")]
 
     plain_summary = (
         f"Official police complaint document recorded. The allegations involve "
@@ -348,7 +362,7 @@ async def understand_fir(file: UploadFile = File(...)):
         "extracted_text": extracted_text[:1200],
         "entities": ai_res.get("privacy_metadata", {}).get("detections", []),
         "summary": plain_summary,
-        "charges": charges_supported,
+        "charges": display_charges,
         "uncertain_provisions": charges_uncertain,
         "analysis": full_analysis,
         "rights": rights,
