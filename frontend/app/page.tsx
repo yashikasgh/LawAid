@@ -1,8 +1,29 @@
 'use client'
 
 import Link from 'next/link'
+import { useEffect, useState } from 'react'
+import { getStoredUser, logout } from '@/lib/auth'
 
 export default function HomePage() {
+  const [user, setUser] = useState(getStoredUser())
+
+  useEffect(() => {
+    setUser(getStoredUser())
+  }, [])
+
+  async function handleProtectedAction(
+    event: React.MouseEvent<HTMLAnchorElement>
+  ) {
+    event.preventDefault()
+
+    if (user) {
+      await logout()
+      setUser(null)
+    }
+
+    window.location.href = '/login'
+  }
+
   return (
     <main className="min-h-screen bg-[#f8f6f1] text-[#12335B]">
 
@@ -43,7 +64,8 @@ export default function HomePage() {
 
                 <div className="mt-9 flex flex-wrap gap-4">
                   <Link
-                    href="/citizen/complaint"
+                    href="/login"
+                    onClick={handleProtectedAction}
                     className="inline-flex items-center justify-center gap-5 rounded-full bg-[#b98528] px-8 py-4 text-[15px] font-semibold text-white shadow-md transition hover:bg-[#a8751e] hover:-translate-y-0.5"
                   >
                     Get Legal Help
@@ -51,7 +73,8 @@ export default function HomePage() {
                   </Link>
 
                   <Link
-                    href="/citizen/understand"
+                    href="/login"
+                    onClick={handleProtectedAction}
                     className="inline-flex items-center justify-center rounded-full border border-[#12335B] bg-white px-8 py-4 text-[15px] font-semibold text-[#12335B] transition hover:bg-[#f3f0e9] hover:-translate-y-0.5"
                   >
                     Upload Your FIR
@@ -72,134 +95,135 @@ export default function HomePage() {
 
       
 
-     {/* ABOUT */}
-<section id="about" className="bg-[#f8f6f1]">
-  <div className="grid grid-cols-1 lg:grid-cols-2 min-h-[620px]">
+      {/* ABOUT */}
+      <section id="about" className="bg-[#f8f6f1]">
+        <div className="grid grid-cols-1 lg:grid-cols-2 min-h-[620px]">
 
-    {/* LEFT CONTENT */}
-    <div className="px-8 sm:px-12 lg:px-16 xl:px-20 py-20 lg:py-24 flex flex-col justify-center">
+          {/* LEFT CONTENT */}
+          <div className="px-8 sm:px-12 lg:px-16 xl:px-20 py-20 lg:py-24 flex flex-col justify-center">
 
-      <div className="flex items-center gap-5 mb-8">
-        <span className="h-px w-10 bg-[#b98528]" />
+            <div className="flex items-center gap-5 mb-8">
+              <span className="h-px w-10 bg-[#b98528]" />
 
-        <span className="text-[11px] tracking-[0.35em] uppercase text-[#56718f]">
-          ABOUT LAWAID
-        </span>
-      </div>
+              <span className="text-[11px] tracking-[0.35em] uppercase text-[#56718f]">
+                ABOUT LAWAID
+              </span>
+            </div>
 
-      <h2 className="font-serif text-[#12335B] text-[48px] sm:text-[56px] lg:text-[58px] leading-[1.05] tracking-[-0.025em] max-w-[650px]">
-        Bridging the gap
-        <br />
-        between people and
-        <br />
-        justice.
-      </h2>
-
-      <p className="mt-9 max-w-[650px] text-[17px] leading-[1.7] text-[#315b82]">
-        LawAid is an AI-powered legal assistance platform
-        designed to make legal information accessible,
-        understandable, and actionable for every Indian
-        citizen.
-      </p>
-
-      <div className="mt-10 grid grid-cols-1 sm:grid-cols-3 gap-7 max-w-[700px]">
-        <Principle
-          icon={<PeopleIcon />}
-          text={
-            <>
-              People
+            <h2 className="font-serif text-[#12335B] text-[48px] sm:text-[56px] lg:text-[58px] leading-[1.05] tracking-[-0.025em] max-w-[650px]">
+              Bridging the gap
               <br />
-              First
-            </>
-          }
-        />
-
-        <Principle
-          icon={<ShieldIcon />}
-          text={
-            <>
-              Reliable
+              between people and
               <br />
-              Information
-            </>
-          }
-        />
+              justice.
+            </h2>
 
-        <Principle
-          icon={<ScaleIcon />}
-          text={
-            <>
-              Technology for
-              <br />
-              Justice
-            </>
-          }
-        />
-      </div>
+            <p className="mt-9 max-w-[650px] text-[17px] leading-[1.7] text-[#315b82]">
+              LawAid is an AI-powered legal assistance platform
+              designed to make legal information accessible,
+              understandable, and actionable for every Indian
+              citizen.
+            </p>
 
-      <div className="mt-10">
-        <Link
-          href="/citizen"
-          className="inline-flex items-center gap-5 rounded-full bg-[#b98528] px-7 py-3.5 text-sm font-semibold text-white transition hover:bg-[#a8751e] hover:-translate-y-0.5"
-        >
-          Learn More
-          <span className="text-lg">→</span>
-        </Link>
-      </div>
+            <div className="mt-10 grid grid-cols-1 sm:grid-cols-3 gap-7 max-w-[700px]">
+              <Principle
+                icon={<PeopleIcon />}
+                text={
+                  <>
+                    People
+                    <br />
+                    First
+                  </>
+                }
+              />
 
-    </div>
+              <Principle
+                icon={<ShieldIcon />}
+                text={
+                  <>
+                    Reliable
+                    <br />
+                    Information
+                  </>
+                }
+              />
 
-    {/* RIGHT IMAGE + QUOTE OVERLAY */}
-    <div className="relative min-h-[620px] overflow-hidden">
+              <Principle
+                icon={<ScaleIcon />}
+                text={
+                  <>
+                    Technology for
+                    <br />
+                    Justice
+                  </>
+                }
+              />
+            </div>
 
-      {/* FULL RIGHT-SIDE IMAGE */}
-      <img
-        src="/images/lawaid-about.png"
-        alt="Supreme Court of India"
-        className="absolute inset-0 h-full w-full object-cover object-center"
-      />
+            <div className="mt-10">
+              <Link
+                href="/login"
+                onClick={handleProtectedAction}
+                className="inline-flex items-center gap-5 rounded-full bg-[#b98528] px-7 py-3.5 text-sm font-semibold text-white transition hover:bg-[#a8751e] hover:-translate-y-0.5"
+              >
+                Learn More
+                <span className="text-lg">→</span>
+              </Link>
+            </div>
 
-      {/* WHITE TRANSLUCENT CONTENT PANEL */}
-      <div className="absolute top-8 left-8 sm:top-10 sm:left-10 lg:top-12 lg:left-12 px-4">
-
-        <div className="w-full max-w-[390px] bg-transparent px-8 sm:px-10 py-10 shadow-[0_15px_40px_rgba(18,51,91,0.10)]">
-
-          <div className="flex items-center gap-5 mb-7">
-            {/* <span className="h-20px w-20 bg-[#b98528]" /> */}
-
-            {/* <span className="text-[10px] sm:text-[11px] tracking-[0.32em] uppercase text-[#56718f]">
-              LAW & JUSTICE
-            </span> */}
           </div>
 
-          <blockquote className="font-serif text-[28px] sm:text-[31px] leading-[1.3] text-[#12335B]">
-            “Justice is not a privilege
-            <br />
-            for a few, but a right for all.”
-          </blockquote>
+          {/* RIGHT IMAGE + QUOTE OVERLAY */}
+          <div className="relative min-h-[620px] overflow-hidden">
 
-          <p className="mt-7 text-[10px] tracking-[0.25em] uppercase text-[#56718f]">
-            — CONSTITUTION OF INDIA
-          </p>
+            {/* FULL RIGHT-SIDE IMAGE */}
+            <img
+              src="/images/lawaid-about.png"
+              alt="Supreme Court of India"
+              className="absolute inset-0 h-full w-full object-cover object-center"
+            />
+
+            {/* WHITE TRANSLUCENT CONTENT PANEL */}
+            <div className="absolute top-8 left-8 sm:top-10 sm:left-10 lg:top-12 lg:left-12 px-4">
+
+              <div className="w-full max-w-[390px] bg-transparent px-8 sm:px-10 py-10 shadow-[0_15px_40px_rgba(18,51,91,0.10)]">
+
+                <div className="flex items-center gap-5 mb-7">
+                  {/* <span className="h-20px w-20 bg-[#b98528]" /> */}
+
+                  {/* <span className="text-[10px] sm:text-[11px] tracking-[0.32em] uppercase text-[#56718f]">
+                    LAW & JUSTICE
+                  </span> */}
+                </div>
+
+                <blockquote className="font-serif text-[28px] sm:text-[31px] leading-[1.3] text-[#12335B]">
+                  “Justice is not a privilege
+                  <br />
+                  for a few, but a right for all.”
+                </blockquote>
+
+                <p className="mt-7 text-[10px] tracking-[0.25em] uppercase text-[#56718f]">
+                  — CONSTITUTION OF INDIA
+                </p>
+
+              </div>
+
+            </div>
+
+          </div>
 
         </div>
-
-      </div>
-
-    </div>
-
-  </div>
-</section>
+      </section>
 
       {/* STATS */}
-<section className="relative bg-[#f8f6f1] border-t border-[#ddd7ca] border-b border-[#ddd7ca]">
-  <div className="grid grid-cols-2 lg:grid-cols-4 items-center py-12 sm:py-14">
-    <Stat number="358+" label="BNS Sections" border />
-    <Stat number="24/7" label="AI Assistance" border />
-    <Stat number="3" label="User Portals" border />
-    <Stat number="1" label="Mission" />
-  </div>
-</section>
+      <section className="relative bg-[#f8f6f1] border-t border-[#ddd7ca] border-b border-[#ddd7ca]">
+        <div className="grid grid-cols-2 lg:grid-cols-4 items-center py-12 sm:py-14">
+          <Stat number="358+" label="BNS Sections" border />
+          <Stat number="24/7" label="AI Assistance" border />
+          <Stat number="3" label="User Portals" border />
+          <Stat number="1" label="Mission" />
+        </div>
+      </section>
 
       {/* SERVICES */}
       <section id="services" className="relative min-h-[620px] overflow-hidden">
@@ -241,7 +265,8 @@ export default function HomePage() {
 
             <div className="mt-10">
               <Link
-                href="/citizen"
+                href="/login"
+                onClick={handleProtectedAction}
                 className="inline-flex items-center gap-5 rounded-full bg-[#b98528] px-8 py-4 text-sm font-semibold text-white transition hover:bg-[#a8751e] hover:-translate-y-0.5"
               >
                 Get Started
