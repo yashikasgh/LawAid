@@ -5,9 +5,12 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+from app.core.deps import get_current_user
 from app.models.fir_registry import FIRRegistry
+from app.models.user import User
 
 router = APIRouter(prefix="/police", tags=["police"])
+
 
 
 class ValidateFIRRequest(BaseModel):
@@ -176,36 +179,77 @@ class ApproveFIRRequest(BaseModel):
     station_code: Optional[str] = "PS001"
     officer_name: Optional[str] = "Station House Officer"
     summary: Optional[str] = ""
+    fir_data: Optional[Dict[str, Any]] = None
 
 
 @router.post("/approve-fir")
-def approve_fir(body: ApproveFIRRequest, db: Session = Depends(get_db)):
+def approve_fir(
+    body: ApproveFIRRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     Formally registers and locks an official FIR draft.
-    Generates cryptographic tamper-proof SHA-256 hash stored in PostgreSQL.
+    Generates cryptographic tamper-proof SHA-256 hash of the final PDF stored in PostgreSQL and GridFS.
+    Requires an authenticated police officer — officer_id is taken from the JWT.
     """
+    import uuid
+    from ai.fir_engine.fir_pdf_generator import generate_fir_pdf
+    from app.core.mongo import mongo_available, fs as _mongo_fs
+    
     now = datetime.datetime.now()
     year = now.year
-    seq = int(now.timestamp()) % 100000
-    official_fir_id = body.fir_draft_id or f"FIR/{year}/{seq:05d}"
 
-    hash_source = f"{official_fir_id}:{body.station_code}:{body.officer_name}:{now.isoformat()}"
-    fir_hash = hashlib.sha256(hash_source.encode("utf-8")).hexdigest()
+    # Use UUID4 for public FIR ID so it's unpredictable
+    if body.fir_draft_id:
+        official_fir_id = body.fir_draft_id
+    else:
+        official_fir_id = f"FIR/{year}/{uuid.uuid4().hex[:8].upper()}"
 
-    # Persist in FIRRegistry if database is accessible
+    # Generate final PDF bytes from fir_data if provided
+    pdf_bytes = b""
+    if body.fir_data:
+        try:
+            body.fir_data["fir_number"] = official_fir_id
+            pdf_bytes = generate_fir_pdf(body.fir_data)
+        except Exception:
+            pdf_bytes = b""
+            
+    if not pdf_bytes:
+        # Fallback if fir_data generation fails or wasn't provided
+        hash_source = f"{official_fir_id}:{body.station_code}:{current_user.id}:{now.isoformat()}"
+        pdf_bytes = hash_source.encode("utf-8")
+
+    fir_hash = hashlib.sha256(pdf_bytes).hexdigest()
+
+    # Store in MongoDB/GridFS
+    file_id = None
+    if mongo_available and _mongo_fs is not None and body.fir_data:
+        try:
+            file_id = str(_mongo_fs.put(
+                pdf_bytes,
+                filename=f"{official_fir_id.replace('/', '_')}.pdf",
+                content_type="application/pdf",
+                metadata={"fir_id": official_fir_id, "sha256_hash": fir_hash}
+            ))
+        except Exception:
+            file_id = None
+
+    # Persist in FIRRegistry — officer_id from authenticated user
     try:
         registry_record = FIRRegistry(
             fir_id=official_fir_id,
             sha256_hash=fir_hash,
-            officer_id=1,
+            officer_id=current_user.id,
             station_code=body.station_code or "PS001",
             status="APPROVED",
+            complaint_text=body.summary or "",
         )
         db.add(registry_record)
         db.commit()
-    except Exception:
-        # Fallback in development
-        pass
+        db.refresh(registry_record)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save FIR registry record: {str(e)}")
 
     return {
         "status": "APPROVED",
@@ -213,7 +257,9 @@ def approve_fir(body: ApproveFIRRequest, db: Session = Depends(get_db)):
         "sha256_hash": fir_hash,
         "station_code": body.station_code,
         "officer": body.officer_name,
+        "officer_id": current_user.id,
         "approved_at": now.isoformat(),
+        "pdf_url": f"/api/fir/download/{file_id}" if file_id else None,
         "tamper_proof_seal": "VERIFIED_BNSS_OFFICIAL",
     }
 
@@ -221,22 +267,35 @@ def approve_fir(body: ApproveFIRRequest, db: Session = Depends(get_db)):
 @router.post("/transcribe")
 async def transcribe_statement(file: UploadFile = File(None), statement_text: Optional[str] = None):
     """
-    Transcribes an oral citizen report or audio statement, and extracts
-    key legal entities (complainant, accused, location, weapon/loss).
+    Accepts a text statement or a plain .txt file and extracts legal entities.
+    NOTE: Real audio-to-text transcription (Whisper/speech-to-text) is NOT yet implemented.
+    Uploading an audio file will return HTTP 501 with a clear message.
     """
     text_content = statement_text or ""
+
     if file:
-        filename = file.filename.lower()
+        filename = (file.filename or "").lower()
         if filename.endswith(".txt"):
             raw_bytes = await file.read()
             text_content = raw_bytes.decode("utf-8", errors="ignore")
         else:
-            text_content = "Recorded complainant verbal testimony lodged at Station GD register."
+            # Audio or other non-text formats — do NOT fake the transcription
+            raise HTTPException(
+                status_code=501,
+                detail=(
+                    "Audio transcription is not yet implemented. "
+                    "Please type or paste the complainant's statement as text. "
+                    "Only .txt files are currently accepted for file-based input."
+                )
+            )
 
-    if not text_content:
-        text_content = "Complainant reported theft of gold chain and cash near railway station market."
+    if not text_content or not text_content.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="No statement text provided. Please supply 'statement_text' or upload a .txt file."
+        )
 
-    # Extract entities if spacy is loaded
+    # Extract entities using spaCy
     entities = {}
     try:
         import spacy
@@ -244,14 +303,18 @@ async def transcribe_statement(file: UploadFile = File(None), statement_text: Op
         doc = nlp(text_content)
         for ent in doc.ents:
             entities.setdefault(ent.label_, []).append(ent.text)
+    except OSError:
+        entities = {}
     except Exception:
-        entities = {"PERSON": ["Complainant"], "GPE": ["Market Area"]}
+        entities = {}
 
     return {
         "status": "ok",
         "transcript": text_content,
         "entities": entities,
+        "note": "Transcript was provided as text input. Audio transcription not available."
     }
+
 
 
 class GenerateFIRRequest(BaseModel):

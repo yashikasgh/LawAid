@@ -55,21 +55,78 @@ export default function CitizenChatPage() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [sessionId, setSessionId] = useState('')
-  const [activeConversation, setActiveConversation] = useState(1)
+  const [sessions, setSessions] = useState<any[]>([])
 
   const chatEndRef = useRef<HTMLDivElement>(null)
+  
+  async function loadSessions() {
+    try {
+      const token = localStorage.getItem('access_token')
+      const res = await fetch("http://localhost:8000/api/chat/sessions", {
+        headers: { "Authorization": `Bearer ${token}` }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setSessions(data)
+      }
+    } catch(e) {
+      console.error(e)
+    }
+  }
 
   useEffect(() => {
+    loadSessions()
+    
     // Generate or restore session ID
     let sid = sessionStorage.getItem('lawaid_chat_session')
-
     if (!sid) {
-      sid = 'session_' + Math.random().toString(36).substring(2, 9)
-      sessionStorage.setItem('lawaid_chat_session', sid)
+      startNewChat()
+    } else {
+      setSessionId(sid)
+      loadHistory(sid)
     }
-
-    setSessionId(sid)
   }, [])
+  
+  async function startNewChat() {
+    try {
+      const token = localStorage.getItem('access_token')
+      const res = await fetch("http://localhost:8000/api/chat/session", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setSessionId(data.session_id)
+        sessionStorage.setItem('lawaid_chat_session', data.session_id)
+        setMessages([
+          {
+            role: 'assistant',
+            content: 'Hello! I am your LawAid Legal Assistant. How can I help you today?',
+          },
+        ])
+        loadSessions()
+      }
+    } catch(e) {
+      console.error(e)
+    }
+  }
+  
+  async function loadHistory(sid: string) {
+    try {
+      const token = localStorage.getItem('access_token')
+      const res = await fetch(`http://localhost:8000/api/chat/history/${sid}`, {
+        headers: { "Authorization": `Bearer ${token}` }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.messages && data.messages.length > 0) {
+           setMessages(data.messages)
+        }
+      }
+    } catch(e) {
+      console.error(e)
+    }
+  }
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -85,23 +142,31 @@ export default function CitizenChatPage() {
     setLoading(true)
 
     try {
-      const res = await chatAPI.sendMessage(sessionId, query)
-
-      const botReply =
-        res.data.reply ||
-        'I received your query but could not retrieve specific sections.'
-
+      const token = localStorage.getItem('access_token')
+      const res = await fetch("http://localhost:8000/api/chat/message", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ session_id: sessionId, message: query })
+      })
+      
+      const data = await res.json()
+      
+      const botReply = data.reply || 'I received your query but could not retrieve specific sections.'
       setMessages(prev => [
         ...prev,
         { role: 'assistant', content: botReply },
       ])
+      
+      loadSessions() // Refresh sidebar
     } catch {
       setMessages(prev => [
         ...prev,
         {
           role: 'assistant',
-          content:
-            'Sorry, I am unable to connect to the legal knowledge server right now. Please ensure the backend is running.',
+          content: 'Sorry, I am unable to connect to the legal knowledge server right now. Please ensure the backend is running.',
         },
       ])
     } finally {
@@ -138,6 +203,7 @@ export default function CitizenChatPage() {
             <div className="p-4 border-b border-white/10">
               <button
                 type="button"
+                onClick={startNewChat}
                 className="w-full flex items-center justify-center gap-2 rounded-full border border-[#d2a14b]/60 bg-[#b98528] px-4 py-3 text-sm font-semibold text-white hover:bg-[#9f7020] transition"
               >
                 <span className="text-lg leading-none">+</span>
@@ -159,15 +225,17 @@ export default function CitizenChatPage() {
             {/* Conversation list */}
             <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-1">
 
-              {PREVIOUS_CONVERSATIONS.map((conversation) => (
+              {sessions.map((conversation) => (
                 <button
-                  key={conversation.id}
+                  key={conversation.session_id}
                   type="button"
-                  onClick={() =>
-                    setActiveConversation(conversation.id)
-                  }
+                  onClick={() => {
+                    setSessionId(conversation.session_id)
+                    sessionStorage.setItem('lawaid_chat_session', conversation.session_id)
+                    loadHistory(conversation.session_id)
+                  }}
                   className={`w-full text-left px-3 py-3 rounded-xl text-sm transition ${
-                    activeConversation === conversation.id
+                    sessionId === conversation.session_id
                       ? 'bg-white/15 text-white shadow-sm'
                       : 'text-white/70 hover:bg-white/10 hover:text-white'
                   }`}
@@ -176,7 +244,7 @@ export default function CitizenChatPage() {
 
                     <span
                       className={`text-sm shrink-0 ${
-                        activeConversation === conversation.id
+                        sessionId === conversation.session_id
                           ? 'text-[#d2a14b]'
                           : 'text-white/45'
                       }`}
@@ -185,7 +253,7 @@ export default function CitizenChatPage() {
                     </span>
 
                     <span className="truncate">
-                      {conversation.title}
+                      {conversation.preview}
                     </span>
 
                   </div>

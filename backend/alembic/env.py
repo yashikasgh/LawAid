@@ -23,6 +23,8 @@ from app.models.user import User
 from app.models.audit_log import AuditLog
 from app.models.session import Session
 from app.models.fir_registry import FIRRegistry
+from app.models.complaint import Complaint
+from app.models.password_reset import PasswordReset
 
 target_metadata = Base.metadata
 
@@ -44,7 +46,8 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    url = config.get_main_option("sqlalchemy.url")
+    from app.core.config import settings
+    url = settings.DATABASE_URL
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -63,8 +66,15 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
+    # Override the url with the one from our config (which reads from env variables)
+    from app.core.config import settings
+    
+    # We must construct a dictionary with the sqlalchemy.url updated
+    configuration = config.get_section(config.config_ini_section, {})
+    configuration["sqlalchemy.url"] = settings.DATABASE_URL
+    
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )

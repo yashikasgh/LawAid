@@ -437,16 +437,44 @@ export default function NewFIRPage() {
     }
   }
 
-  function saveDraft() {
+  async function saveDraft() {
     const syncedForm = getSynchronizedForm(form)
-    sessionStorage.setItem(
-      'lawaid_fir_draft',
-      JSON.stringify({
-        ...syncedForm,
-        statement,
+    const draftPayload = {
+      ...syncedForm,
+      statement,
+    }
+    
+    // Fallback to session storage just in case
+    sessionStorage.setItem('lawaid_fir_draft', JSON.stringify(draftPayload))
+    
+    try {
+      const token = localStorage.getItem('access_token')
+      const draftId = sessionStorage.getItem('lawaid_draft_id')
+      if (draftId) {
+        draftPayload.draft_id = draftId
+      }
+      
+      const res = await fetch('http://localhost:8000/api/fir/drafts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(draftPayload)
       })
-    )
-    setSaveStatus('Draft saved successfully!')
+      if (res.ok) {
+        const data = await res.json()
+        if (data.draft_id) {
+          sessionStorage.setItem('lawaid_draft_id', data.draft_id)
+        }
+        setSaveStatus('Draft saved securely to backend!')
+      } else {
+        setSaveStatus('Draft saved locally (backend unavailable).')
+      }
+    } catch (e) {
+      setSaveStatus('Draft saved locally (network error).')
+    }
+    
     setTimeout(() => setSaveStatus(''), 3000)
   }
 

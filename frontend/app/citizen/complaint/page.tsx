@@ -224,13 +224,42 @@ export default function ComplaintPage() {
                 placeholder="Describe the incident in detail. Mention what happened, where, and any actions taken. Personal information will be automatically sanitized by our local privacy gate."
                 className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-lawblue transition resize-none"
               />
-              <div className="mt-4">
+              <div className="mt-4 flex gap-3">
                 <Button
                   label={loading ? 'Running AI Legal Analysis...' : 'Analyze & Identify BNS Sections'}
                   onClick={handleAnalyze}
                   loading={loading}
                   disabled={!complaint.trim() || complaint.trim().length < 5}
                 />
+                <button
+                  onClick={async () => {
+                    try {
+                      setLoading(true)
+                      const token = localStorage.getItem('access_token')
+                      const res = await fetch('http://localhost:8000/api/complaints', {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify({ complaint_text: complaint, detected_sections: supportedItems.map(i => i.section) })
+                      })
+                      if (res.ok) {
+                        alert("Complaint saved to your history successfully!")
+                      } else {
+                        alert("Failed to save complaint")
+                      }
+                    } catch (e) {
+                      console.error(e)
+                    } finally {
+                      setLoading(false)
+                    }
+                  }}
+                  disabled={!complaint.trim() || loading}
+                  className="px-4 py-2 border border-lawblue text-lawblue rounded-xl font-semibold hover:bg-lawblue/10 transition disabled:opacity-50"
+                >
+                  Save to History
+                </button>
               </div>
             </div>
 
