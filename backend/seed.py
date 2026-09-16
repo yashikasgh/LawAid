@@ -17,11 +17,7 @@ def seed_db():
             if not existing:
                 new_user = User(email=u["email"], password_hash=hash_password(u["password"]), role=u["role"])
                 db.add(new_user)
-                print(f"Seeded user: {u[
-'
-email
-'
-]}")
+                print(f"Seeded user: {u['email']}")
         db.commit()
         db.close()
     except Exception as e:
