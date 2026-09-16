@@ -1,10 +1,10 @@
 // app/register/page.tsx
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { authAPI } from '@/lib/api'
-import { completeLogin, ROLE_ROUTES } from '@/lib/auth'
+import { completeLogin, getStoredUser, ROLE_ROUTES } from '@/lib/auth'
 
 const ROLES = ['Citizen', 'Police', 'Lawyer']
 
@@ -17,6 +17,23 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      const user = getStoredUser()
+      if (user) {
+        try {
+          await authAPI.me()
+          router.replace(ROLE_ROUTES[user.role.toLowerCase()] || "/")
+        } catch {
+          localStorage.removeItem('lawaid_token')
+          localStorage.removeItem('lawaid_role')
+          localStorage.removeItem('lawaid_user')
+        }
+      }
+    }
+    checkAuth()
+  }, [router])
 
   async function handleRegister() {
     setError('')

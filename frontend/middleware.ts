@@ -27,8 +27,11 @@ export async function middleware(request: NextRequest) {
 
   try {
     // Ask the backend to validate the JWT and return the real user role.
+    // In Docker, the server-side Next.js needs to hit the backend container name, not localhost.
     const apiUrl =
-      process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+      process.env.INTERNAL_API_URL ||
+      process.env.NEXT_PUBLIC_API_URL ||
+      'http://localhost:8000'
 
     const response = await fetch(`${apiUrl}/auth/me`, {
       headers: {

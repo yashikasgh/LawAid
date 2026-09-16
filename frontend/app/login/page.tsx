@@ -1,9 +1,8 @@
-
 "use client"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { authAPI } from "@/lib/api"
-import { completeLogin, ROLE_ROUTES } from "@/lib/auth"
+import { completeLogin, getStoredUser, ROLE_ROUTES } from "@/lib/auth"
 
 const ROLES = ["Citizen", "Police", "Lawyer"]
 
@@ -15,6 +14,24 @@ export default function LoginPage() {
   const [error, setError] = useState("")
   const [message, setMessage] = useState("")
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      const user = getStoredUser()
+      if (user) {
+        try {
+          await authAPI.me()
+          router.replace(ROLE_ROUTES[user.role.toLowerCase()] || "/")
+        } catch {
+          // Token is dead, clear local storage
+          localStorage.removeItem('lawaid_token')
+          localStorage.removeItem('lawaid_role')
+          localStorage.removeItem('lawaid_user')
+        }
+      }
+    }
+    checkAuth()
+  }, [router])
 
   // Modes: "login" | "forgot" | "reset"
   const [mode, setMode] = useState<"login" | "forgot" | "reset">("login")
@@ -35,8 +52,10 @@ export default function LoginPage() {
     } catch (err: any) {
       if (err?.response?.status === 401) {
         setError("Invalid email or password. Please try again.")
+      } else if (err?.response?.status === 403) {
+        setError(err.response.data.detail || "You do not have access to this portal.")
       } else if (err?.response?.status === 422) {
-        setError("Something is missing from the request — check role/email/password.")
+        setError("Something is missing from the request - check role/email/password.")
       } else {
         setError("Something went wrong. Please try again.")
       }

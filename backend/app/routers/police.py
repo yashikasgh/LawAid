@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, require_role
 from app.models.fir_registry import FIRRegistry
 from app.models.user import User
 
@@ -69,7 +69,7 @@ def _fallback_extract_entities(statement_text: str) -> Dict[str, str]:
 
 
 @router.post("/extract-statement")
-def extract_statement(body: ExtractStatementRequest):
+def extract_statement(body: ExtractStatementRequest, current_user: User = Depends(require_role("police"))):
     """
     Extracts structured IF1 First Information Report fields from an incident statement.
     Uses AI/LLM structured extraction with fallback to spaCy/NER.
@@ -141,7 +141,7 @@ def extract_statement(body: ExtractStatementRequest):
 
 
 @router.post("/validate-fir")
-def validate_fir(body: ValidateFIRRequest):
+def validate_fir(body: ValidateFIRRequest, current_user: User = Depends(require_role("police"))):
     """
     Validates mandatory Indian FIR fields under BNSS Section 173.
     Checks date, location, complainant identity, and BNS offence definition.
@@ -186,7 +186,7 @@ class ApproveFIRRequest(BaseModel):
 def approve_fir(
     body: ApproveFIRRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("police")),
 ):
     """
     Formally registers and locks an official FIR draft.
@@ -265,7 +265,7 @@ def approve_fir(
 
 
 @router.post("/transcribe")
-async def transcribe_statement(file: UploadFile = File(None), statement_text: Optional[str] = None):
+async def transcribe_statement(file: UploadFile = File(None), statement_text: Optional[str] = None, current_user: User = Depends(require_role("police"))):
     """
     Accepts a text statement or a plain .txt file and extracts legal entities.
     NOTE: Real audio-to-text transcription (Whisper/speech-to-text) is NOT yet implemented.
@@ -326,7 +326,7 @@ class RenderFIRPDFRequest(BaseModel):
 
 
 @router.post("/generate-fir")
-def generate_fir(body: GenerateFIRRequest):
+def generate_fir(body: GenerateFIRRequest, current_user: User = Depends(require_role("police"))):
     """
     Executes the end-to-end AI FIR Generation workflow for Police Officers.
     Runs grounded LawAid RAG pipeline, extracts supported BNS sections,
@@ -385,7 +385,7 @@ def generate_fir(body: GenerateFIRRequest):
 
 
 @router.post("/render-fir-pdf")
-def render_fir_pdf(body: RenderFIRPDFRequest):
+def render_fir_pdf(body: RenderFIRPDFRequest, current_user: User = Depends(require_role("police"))):
     """
     Renders updated/edited structured FIR JSON into the official IF1 PDF template and returns PDF file bytes.
     """

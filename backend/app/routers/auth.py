@@ -26,10 +26,17 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=Token)
 def login(user_in: UserLoginRequest, db: Session = Depends(get_db)):
-    """Login endpoint. Role always comes from the database record, never from client input."""
+    """Login endpoint. Enforces that the portal role matches the user's actual DB role."""
     user = db.query(User).filter(User.email == user_in.email).first()
+    
     if not user or not verify_password(user_in.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+    if user.role != user_in.role:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Account is registered as a {user.role.capitalize()}. Please use the {user.role.capitalize()} portal to log in."
+        )
 
     # JWT role comes from the TRUSTED DATABASE record, not from the client request
     token = create_access_token({"sub": str(user.id), "role": user.role})

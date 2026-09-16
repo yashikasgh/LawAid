@@ -28,11 +28,6 @@ services:
       - mongo_data:/data/db
     ports:
       - "27018:27017"
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
 
   backend:
     build: 
@@ -44,7 +39,7 @@ services:
       postgres:
         condition: service_healthy
       mongo:
-        condition: service_healthy
+        condition: service_started
     env_file:
       - .env
     environment:
@@ -62,6 +57,7 @@ services:
     restart: always
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - INTERNAL_API_URL=http://backend:8000
     ports:
       - "3002:3000"
     depends_on:

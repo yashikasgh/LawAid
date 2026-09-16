@@ -6,10 +6,10 @@ class UserCreate(BaseModel):
     role: str
 
 class UserLoginRequest(BaseModel):
-    """Login schema — role is intentionally excluded.
-    The user's role is always loaded from the database, never trusted from client input."""
+    """Login schema. User must provide the role of the portal they are logging in from."""
     email: EmailStr
     password: str
+    role: str
 
 class UserResponse(BaseModel):
     id: int

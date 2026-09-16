@@ -17,8 +17,15 @@ export default function HomePage() {
     event.preventDefault()
 
     if (user) {
-      await logout()
-      setUser(null)
+      const role = user.role?.toLowerCase() || 'citizen'
+      const ROLE_ROUTES: Record<string, string> = {
+        citizen: '/citizen',
+        police: '/police',
+        lawyer: '/lawyer',
+        admin: '/admin',
+      }
+      window.location.href = ROLE_ROUTES[role] || '/'
+      return
     }
 
     window.location.href = '/login'
