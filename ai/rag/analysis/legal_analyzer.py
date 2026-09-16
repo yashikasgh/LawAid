@@ -243,10 +243,13 @@ class GroqLLMClient(LLMClient):
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.0,
             }
-            if is_json_mode:
-                req_kwargs["response_format"] = {"type": "json_object"}
+            # Disabled server-side response_format for Groq as local parsing handles JSON safely
+            # and Groq's server-side JSON validation causes HTTP 400 json_validate_failed on large prompts.
             if max_tokens is not None:
-                req_kwargs["max_completion_tokens"] = max_tokens
+                if "120b" in self.model_name.lower():
+                    req_kwargs["max_completion_tokens"] = max(max_tokens, 6000)
+                else:
+                    req_kwargs["max_completion_tokens"] = max_tokens
             response = self.client.chat.completions.create(**req_kwargs)
             if response.choices and len(response.choices) > 0:
                 message = response.choices[0].message
@@ -388,8 +391,9 @@ class OpenRouterLLMClient(LLMClient):
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.0,
         }
-        if is_json_mode:
-            payload["response_format"] = {"type": "json_object"}
+        # Disabled server-side response_format for OpenRouter as open models on free tier
+        # silently return empty message content when response_format is requested.
+        # Local parsing via _parse_json_from_llm handles JSON extraction safely.
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
 
@@ -409,8 +413,6 @@ class OpenRouterLLMClient(LLMClient):
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.0,
                 }
-                if is_json_mode:
-                    sdk_kwargs["response_format"] = {"type": "json_object"}
                 if max_tokens is not None:
                     sdk_kwargs["max_tokens"] = max_tokens
                 response = client.chat.completions.create(**sdk_kwargs)
@@ -817,53 +819,52 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any]) -> str:
     incident = legal_context_obj.get("incident", {})
     raw_context = legal_context_obj.get("legal_context", [])
 
-    formatted_context_groups = []
+    formatted_context_sections = []
     seen_doc_ids = set()
-    seen_section_defs = set()
+
+    section_groups: Dict[str, Dict[str, Any]] = {}
+    section_order: List[str] = []
 
     for group in raw_context:
-        offence_type = group.get("offence_type", "")
-        query = group.get("query", "")
-        formatted_docs = []
         for doc in group.get("results", []):
             doc_id = doc.get("id") or doc.get("document_id") or ""
             if doc_id in seen_doc_ids:
                 continue
             seen_doc_ids.add(doc_id)
 
+            sec_num = str(doc.get("section", "")).strip() or "unknown"
             target_text = doc.get("target_clause_text") or doc.get("text", "")
-            sec_def = doc.get("section_definition", "")
-            sec_num = str(doc.get("section", "")).strip()
 
-            compact_doc = {
+            if sec_num not in section_groups:
+                sec_def = doc.get("section_definition", "")
+                clean_sec_def = sec_def if sec_def and sec_def.strip() != target_text.strip() else ""
+
+                sec_entry = {
+                    "section": doc.get("section", ""),
+                    "title": doc.get("title", "")
+                }
+                if clean_sec_def:
+                    sec_entry["section_definition"] = clean_sec_def
+                sec_entry["clauses"] = []
+
+                section_groups[sec_num] = sec_entry
+                section_order.append(sec_num)
+
+            clause_entry = {
                 "id": doc_id,
-                "section": doc.get("section", ""),
                 "clause": doc.get("clause", ""),
-                "title": doc.get("title", ""),
                 "target_clause_text": target_text
             }
-
-            if sec_def and sec_def.strip() != target_text.strip():
-                if not sec_num or sec_num not in seen_section_defs:
-                    compact_doc["section_definition"] = sec_def
-                    if sec_num:
-                        seen_section_defs.add(sec_num)
-
             sched_1 = doc.get("schedule_1", {})
             if isinstance(sched_1, dict):
                 sched_offence = sched_1.get("offence", "")
                 if sched_offence and sched_offence.strip():
-                    compact_doc["schedule_1_offence"] = sched_offence.strip()
+                    clause_entry["schedule_1_offence"] = sched_offence.strip()
 
-            formatted_docs.append(compact_doc)
+            section_groups[sec_num]["clauses"].append(clause_entry)
 
-        if formatted_docs:
-            group_entry = {"results": formatted_docs}
-            if offence_type and offence_type != "reranked_candidates":
-                group_entry["offence_type"] = offence_type
-            if query:
-                group_entry["query"] = query
-            formatted_context_groups.append(group_entry)
+    for sec_num in section_order:
+        formatted_context_sections.append(section_groups[sec_num])
 
     prompt = (
         "You are an expert legal analysis system for Indian criminal law (Bharatiya Nyaya Sanhita - BNS 2023).\n"
@@ -972,7 +973,7 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any]) -> str:
         "INCIDENT FACTS:\n"
         f"{json.dumps(incident, indent=2)}\n\n"
         "RETRIEVED BNS LEGAL CONTEXT:\n"
-        f"{json.dumps(formatted_context_groups, indent=2)}\n\n"
+        f"{json.dumps(formatted_context_sections, indent=2)}\n\n"
         "FINAL OUTPUT REQUIREMENT:\n"
         "Return ONLY a valid JSON object matching the JSON OUTPUT SCHEMA FORMAT. "
         "Your response MUST start directly with '{' and contain no preamble, conversational text, or markdown code blocks."
@@ -1186,13 +1187,21 @@ def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj:
 
 
 
-def analyze_incident(ner_result: Dict[str, Any], retrieval_result: Dict[str, Any], llm_client: Optional[LLMClient] = None) -> Dict[str, Any]:
+def analyze_incident(
+    ner_result: Dict[str, Any],
+    retrieval_result: Dict[str, Any],
+    llm_client: Optional[LLMClient] = None,
+    max_tokens: Optional[int] = None,
+    workload: Workload = Workload.CITIZEN_FIR_ANALYSIS
+) -> Dict[str, Any]:
     """Execute legal analysis on incident facts and BNS retrieval context using structured LLM generation.
 
     Args:
         ner_result (dict): Structured output from extract_entities().
         retrieval_result (dict): Grouped output from retrieve_by_ner().
         llm_client (LLMClient, optional): Client instance for LLM generation.
+        max_tokens (int, optional): Explicit completion token limit. If None, calculated dynamically.
+        workload (Workload): Current execution workload type.
 
     Returns:
         dict: Structured legal analysis object with evidence grounding and limitation reports.
@@ -1203,13 +1212,30 @@ def analyze_incident(ner_result: Dict[str, Any], retrieval_result: Dict[str, Any
     context_obj = build_legal_context(ner_result, retrieval_result)
     prompt = construct_analysis_prompt(context_obj)
 
+    if max_tokens is None:
+        prompt_tokens = estimate_tokens(prompt)
+        cand_count = len(retrieval_result) if isinstance(retrieval_result, list) else 1
+        target_output = min(3000, max(1200, cand_count * 200 + 400))
+        is_groq_120b = False
+        if hasattr(llm_client, "model_name") and "120b" in str(getattr(llm_client, "model_name", "")).lower():
+            is_groq_120b = True
+        elif hasattr(llm_client, "active_provider_info"):
+            active_info = getattr(llm_client, "active_provider_info", {})
+            if isinstance(active_info, dict) and "120b" in str(active_info.get("model", "")).lower():
+                is_groq_120b = True
+
+        if is_groq_120b:
+            max_tokens = 6000
+        else:
+            max_tokens = min(target_output, max(500, GROQ_SAFE_REQUEST_TOKEN_BUDGET - prompt_tokens))
+
     raw_output = ""
     parsed_json = None
     parse_error = None
 
     # Attempt 1
     try:
-        raw_output = llm_client.generate(prompt, max_tokens=1300, workload=Workload.CITIZEN_FIR_ANALYSIS)
+        raw_output = llm_client.generate(prompt, max_tokens=max_tokens, workload=workload)
         parsed_json = _parse_json_from_llm(raw_output)
     except Exception as err1:
         parse_error = str(err1)
@@ -1225,7 +1251,7 @@ def analyze_incident(ner_result: Dict[str, Any], retrieval_result: Dict[str, Any
             "Return ONLY corrected, strict, valid JSON matching the schema. Do NOT include any markdown code blocks or text outside the JSON."
         )
         try:
-            raw_output = llm_client.generate(retry_prompt, max_tokens=1300, workload=Workload.CITIZEN_FIR_ANALYSIS)
+            raw_output = llm_client.generate(retry_prompt, max_tokens=max_tokens, workload=workload)
             parsed_json = _parse_json_from_llm(raw_output)
         except Exception as err2:
             parse_error = str(err2)

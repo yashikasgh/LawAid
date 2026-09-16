@@ -161,14 +161,18 @@ class TestPipeline(unittest.TestCase):
         # Extract candidates passed in prompt JSON
         m_ctx = re.search(r"RETRIEVED BNS LEGAL CONTEXT:\s*(\[.*\])", analysis_prompt, re.DOTALL)
         self.assertIsNotNone(m_ctx)
-        groups = json.loads(m_ctx.group(1))
-        passed_docs = groups[0]["results"]
+        sections = json.loads(m_ctx.group(1))
+        passed_docs = []
+        for sec in sections:
+            if "results" in sec:
+                passed_docs.extend(sec["results"])
+            elif "clauses" in sec:
+                passed_docs.extend(sec["clauses"])
 
         if len(full_reranked) >= 7:
             self.assertEqual(len(passed_docs), 7, "Exactly 7 candidates must be passed to LLM analysis when >=7 exist")
-            # Verify passed candidates match top 7 of full reranked candidate pool
-            for i in range(7):
-                self.assertEqual(passed_docs[i]["id"], full_reranked[i]["id"])
+            # Verify passed candidate IDs match top 7 of full reranked candidate pool
+            self.assertEqual(set(doc["id"] for doc in passed_docs), set(doc["id"] for doc in full_reranked[:7]))
 
     def test_8_analysis_candidate_limit_preserves_fewer_than_7_candidates(self):
         """8. Verify fewer than 7 candidates are preserved as-is without error or padding."""
@@ -181,8 +185,13 @@ class TestPipeline(unittest.TestCase):
 
         analysis_prompt = mock_llm.prompts_received[1]
         m_ctx = re.search(r"RETRIEVED BNS LEGAL CONTEXT:\s*(\[.*\])", analysis_prompt, re.DOTALL)
-        groups = json.loads(m_ctx.group(1))
-        passed_docs = groups[0]["results"]
+        sections = json.loads(m_ctx.group(1))
+        passed_docs = []
+        for sec in sections:
+            if "results" in sec:
+                passed_docs.extend(sec["results"])
+            elif "clauses" in sec:
+                passed_docs.extend(sec["clauses"])
         self.assertEqual(len(passed_docs), len(full_reranked), "Fewer than 7 candidates must be preserved as-is")
 
     def test_9_reranked_candidates_contains_authoritative_metadata(self):

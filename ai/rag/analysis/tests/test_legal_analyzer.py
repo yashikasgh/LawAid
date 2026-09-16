@@ -292,8 +292,7 @@ class TestLegalAnalyzer(unittest.TestCase):
         mock_instance.chat.completions.create.assert_called_once_with(
             model=client.model_name,
             messages=[{"role": "user", "content": "Test prompt"}],
-            temperature=0.0,
-            response_format={"type": "json_object"}
+            temperature=0.0
         )
 
     @unittest.mock.patch("groq.Groq")
@@ -869,20 +868,20 @@ class TestLegalAnalyzer(unittest.TestCase):
         # Parse RETRIEVED BNS LEGAL CONTEXT JSON from prompt
         m_ctx = re.search(r"RETRIEVED BNS LEGAL CONTEXT:\s*(\[.*\])", prompt, re.DOTALL)
         self.assertIsNotNone(m_ctx)
-        groups = json.loads(m_ctx.group(1))
-        docs = groups[0]["results"]
+        sections = json.loads(m_ctx.group(1))
 
-        self.assertEqual(len(docs), 3)
-        # First candidate document has section_definition
-        self.assertIn("section_definition", docs[0])
-        # Sibling candidates 2 and 3 do NOT repeat section_definition
-        self.assertNotIn("section_definition", docs[1])
-        self.assertNotIn("section_definition", docs[2])
+        self.assertEqual(len(sections), 1)
+        sec_obj = sections[0]
+        self.assertEqual(str(sec_obj["section"]), "303")
+        self.assertIn("section_definition", sec_obj)
 
-        # All 3 candidates retain their own id, section, clause, title, and target_clause_text
-        for d in docs:
-            self.assertEqual(str(d["section"]), "303")
-            self.assertIn("target_clause_text", d)
+        clauses = sec_obj["clauses"]
+        self.assertEqual(len(clauses), 3)
+
+        # Sibling clauses do NOT repeat section_definition
+        for cl in clauses:
+            self.assertNotIn("section_definition", cl)
+            self.assertIn("target_clause_text", cl)
 
     def test_27_distinct_bns_sections_retain_their_own_section_definitions(self):
         """Test 27: Distinct BNS sections each retain their own section_definition in prompt context."""
@@ -909,15 +908,14 @@ class TestLegalAnalyzer(unittest.TestCase):
 
         m_ctx = re.search(r"RETRIEVED BNS LEGAL CONTEXT:\s*(\[.*\])", prompt, re.DOTALL)
         self.assertIsNotNone(m_ctx)
-        groups = json.loads(m_ctx.group(1))
-        docs = groups[0]["results"]
+        sections = json.loads(m_ctx.group(1))
 
-        self.assertEqual(len(docs), 2)
+        self.assertEqual(len(sections), 2)
         # Both distinct sections (303 and 304) retain their own section_definition
-        self.assertIn("section_definition", docs[0])
-        self.assertIn("section_definition", docs[1])
-        self.assertEqual(docs[0]["section_definition"], "303.(1) Theft definition text...")
-        self.assertEqual(docs[1]["section_definition"], "304.(1) Snatching definition text...")
+        self.assertIn("section_definition", sections[0])
+        self.assertIn("section_definition", sections[1])
+        self.assertEqual(sections[0]["section_definition"], "303.(1) Theft definition text...")
+        self.assertEqual(sections[1]["section_definition"], "304.(1) Snatching definition text...")
 
 
 
@@ -1269,7 +1267,6 @@ class TestMaxTokensBudgetsAndProviderKwargs(unittest.TestCase):
             model=client.model_name,
             messages=[{"role": "user", "content": "Test prompt"}],
             temperature=0.0,
-            response_format={"type": "json_object"},
             max_completion_tokens=1300
         )
 

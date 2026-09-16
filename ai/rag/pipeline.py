@@ -24,7 +24,7 @@ from ai.security.privacy_gateway import sanitize_text
 from ai.rag.ner.ner_extractor import extract_entities
 from ai.rag.retrieval.query_generator import generate_queries
 from ai.rag.retrieval.retrieve_bns import retrieve
-from ai.rag.retrieval.reranker import rerank_candidates
+from ai.rag.retrieval.reranker import rerank_candidates, rerank_section_candidates
 from ai.rag.analysis.legal_analyzer import analyze_incident, GroqLLMClient, MultiProviderLLMFailoverClient, LLMClient, Workload
 from ai.rag.analysis.context_builder import _extract_clause_parts, _parse_schedule_1
 
@@ -131,12 +131,102 @@ def _build_retrieval_fallback_analysis(candidates: List[Dict[str, Any]]) -> List
     return fallback_items
 
 
+def pack_candidates_by_section(
+    reranked_candidates: List[Dict[str, Any]],
+    base_prompt_tokens: int = 700,
+    min_output_tokens: int = 3500,
+    max_token_budget: int = 6700
+) -> Dict[str, Any]:
+    """Group reranked clause documents by parent legal section and dynamically pack complete section groups
+
+    into the LLM context within safe token budget limits.
+
+    Args:
+        reranked_candidates (list): RRF-ordered list of retrieved clause document dicts.
+        base_prompt_tokens (int): Overhead tokens for system instructions and incident facts.
+        min_output_tokens (int): Required completion token budget.
+        max_token_budget (int): Hard safety limit for provider request (e.g. 6,700 tokens for Groq/Gemini).
+
+    Returns:
+        dict: {
+            "packed_candidates": list of clause document dicts preserving RRF rank order,
+            "packed_sections": list of section numbers included,
+            "capacity_reached": bool indicating if packing stopped due to token limit,
+            "total_tokens_estimated": int total estimated tokens packed
+        }
+    """
+    safe_budget = max_token_budget - min_output_tokens
+    current_tokens = base_prompt_tokens
+
+    # Step 1: Group sibling clause documents by parent section while preserving first-seen RRF rank order
+    section_groups: Dict[str, List[Dict[str, Any]]] = {}
+    section_order: List[str] = []
+
+    for cand in reranked_candidates:
+        sec = str(cand.get("section", "")).strip() or "unknown"
+        if sec not in section_groups:
+            section_groups[sec] = []
+            section_order.append(sec)
+        section_groups[sec].append(cand)
+
+    packed_candidates: List[Dict[str, Any]] = []
+    packed_sections: List[str] = []
+    capacity_reached = False
+
+    # Step 2: Pack sections in RRF rank order, accounting tokens for compact section representation
+    for sec in section_order:
+        sibling_docs = section_groups[sec]
+
+        # Calculate compact section token footprint (1 parent header + sum of sub-clause snippets)
+        sec_title = sibling_docs[0].get("title", "")
+        sec_def_text = sibling_docs[0].get("section_definition", "")
+        parent_header = f"{sec_title} {sec_def_text}".strip()
+
+        clause_tokens_sum = 0
+        for doc in sibling_docs:
+            ctext = doc.get("target_clause_text") or doc.get("text", "")
+            clause_tokens_sum += (len(ctext) // 4) + 25
+
+        sec_compact_tokens = (len(parent_header) // 4) + 30 + clause_tokens_sum
+
+        if current_tokens + sec_compact_tokens <= safe_budget:
+            packed_candidates.extend(sibling_docs)
+            packed_sections.append(sec)
+            current_tokens += sec_compact_tokens
+        else:
+            # Entire section group cannot fit within safe_budget. Mark capacity_reached.
+            capacity_reached = True
+
+            # Check if packing at least the primary (highest-ranked) clause of this section fits safely.
+            primary_doc = sibling_docs[0]
+            primary_text = primary_doc.get("target_clause_text") or primary_doc.get("text", "")
+            primary_tokens = (len(parent_header) // 4) + 30 + (len(primary_text) // 4) + 25
+
+            if current_tokens + primary_tokens <= safe_budget:
+                packed_candidates.append(primary_doc)
+                packed_sections.append(sec)
+                current_tokens += primary_tokens
+            # Continue scanning subsequent sections to see if smaller ranked sections fit into remaining budget
+
+    # Safe Minimum Fallback: Ensure at least the top RRF candidate is included if reranked candidates exist
+    if not packed_candidates and reranked_candidates:
+        packed_candidates = [reranked_candidates[0]]
+        packed_sections = [str(reranked_candidates[0].get("section", ""))]
+
+    return {
+        "packed_candidates": packed_candidates,
+        "packed_sections": packed_sections,
+        "capacity_reached": capacity_reached,
+        "total_tokens_estimated": current_tokens
+    }
+
+
 def run_pipeline(
     raw_incident: str,
     llm_client: Optional[LLMClient] = None,
     top_k_retrieval: int = 20,
     top_k_rerank: int = 15,
-    analysis_candidate_limit: int = 7
+    analysis_candidate_limit: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Executes the end-to-end LawAid RAG Legal Analysis Pipeline.
@@ -199,16 +289,30 @@ def run_pipeline(
                 doc_id = item.get("id")
                 if not doc_id:
                     continue
-                all_retrieved_candidates.append(item)
+                item_copy = dict(item)
+                item_copy["query"] = q_str
+                all_retrieved_candidates.append(item_copy)
         except Exception:
             continue
 
-    # 6. Full RRF Reranking across candidate pool (Top-15)
-    reranked_candidates = rerank_candidates(
-        incident_input=ner_result,
-        candidates=all_retrieved_candidates,
-        top_k=top_k_rerank
-    )
+    # 6. Section-Level RRF Reranking across candidate pool
+    if analysis_candidate_limit is not None:
+        # Legacy/Test explicit candidate limit path
+        reranked_candidates = rerank_candidates(
+            incident_input=ner_result,
+            candidates=all_retrieved_candidates,
+            top_k=top_k_rerank
+        )
+    else:
+        # Parent Section-Level RRF Reranking (Unbounded RRF Pool, Section Grouped)
+        section_reranked = rerank_section_candidates(
+            candidates=all_retrieved_candidates,
+            top_k=None
+        )
+        # Flatten section candidate records in section-RRF rank order while preserving all child clause records
+        reranked_candidates = []
+        for sec_rec in section_reranked:
+            reranked_candidates.extend(sec_rec.get("clauses", []))
 
     # Enrich reranked_candidates with clause text and Schedule 1 metadata for clean fallback presentation
     for cand in reranked_candidates:
@@ -228,12 +332,22 @@ def run_pipeline(
                 "court": schedule_1_raw.get("court", "") or schedule_1_raw.get("triable_by", "")
             }
 
-    # 7. Analysis Context Limit: Select Top-7 candidates for LLM prompt
-    analysis_candidates = (
-        reranked_candidates[:analysis_candidate_limit]
-        if analysis_candidate_limit is not None and len(reranked_candidates) > analysis_candidate_limit
-        else reranked_candidates
-    )
+    # 7. Analysis Context Limit: Select candidates for LLM prompt
+    if analysis_candidate_limit is not None:
+        analysis_candidates = (
+            reranked_candidates[:analysis_candidate_limit]
+            if len(reranked_candidates) > analysis_candidate_limit
+            else reranked_candidates
+        )
+    else:
+        # Parent Section-Level Dynamic Token Budget Candidate Selection
+        pack_res = pack_candidates_by_section(
+            reranked_candidates=reranked_candidates,
+            base_prompt_tokens=700,
+            min_output_tokens=3500,
+            max_token_budget=6700
+        )
+        analysis_candidates = pack_res["packed_candidates"]
 
     # 8. Legal Analysis (Internal context building & evidence grounding)
     analysis_result = analyze_incident(
