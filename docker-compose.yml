@@ -27,7 +27,7 @@ services:
     volumes:
       - mongo_data:/data/db
     ports:
-      - "27017:27017"
+      - "27018:27017"
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 5s
@@ -63,7 +63,7 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
     ports:
-      - "3000:3000"
+      - "3002:3000"
     depends_on:
       - backend
 
