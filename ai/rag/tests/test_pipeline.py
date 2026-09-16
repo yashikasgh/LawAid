@@ -4,6 +4,7 @@ Located at: ai/rag/tests/test_pipeline.py
 """
 
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -28,11 +29,27 @@ class TestPipeline(unittest.TestCase):
             "The accused Rahul entered the shop and took a mobile phone belonging to Vijay (PAN: ABCDE1234F, Aadhaar: 2345 6789 0123) "
             "without permission. Call 9876543210 or email test@example.com."
         )
+        self.mock_query_response = json.dumps({
+            "queries": [
+                {
+                    "query_type": "fact_focused",
+                    "query": "taking mobile phone without consent"
+                },
+                {
+                    "query_type": "incident_context",
+                    "query": "Rahul entered shop and took mobile phone"
+                },
+                {
+                    "query_type": "legal_concept",
+                    "query": "dishonest taking of movable property"
+                }
+            ]
+        })
         self.mock_llm_response = json.dumps({
             "status": "success",
             "analysis": [
                 {
-                    "document_id": "bns_303_303(2)-2",
+                    "document_id": "bns_303_303(2)",
                     "applicability": "supported",
                     "reasoning": "The accused took a mobile phone belonging to Vijay without consent."
                 }
@@ -42,7 +59,7 @@ class TestPipeline(unittest.TestCase):
 
     def test_1_privacy_happens_before_llm_call(self):
         """1. Verify privacy sanitization occurs before any LLM prompt generation."""
-        mock_llm = MockLLMClient(responses=[self.mock_llm_response, self.mock_llm_response])
+        mock_llm = MockLLMClient(responses=[self.mock_query_response, self.mock_llm_response])
 
         result = run_pipeline(self.sample_raw_incident, llm_client=mock_llm)
 
@@ -62,7 +79,7 @@ class TestPipeline(unittest.TestCase):
 
     def test_2_end_to_end_successful_flow_with_mock_llm(self):
         """2. Verify successful end-to-end flow returning structured result."""
-        mock_llm = MockLLMClient(responses=[self.mock_llm_response, self.mock_llm_response])
+        mock_llm = MockLLMClient(responses=[self.mock_query_response, self.mock_llm_response])
 
         result = run_pipeline(self.sample_raw_incident, llm_client=mock_llm)
 
@@ -83,7 +100,7 @@ class TestPipeline(unittest.TestCase):
 
     def test_3_no_raw_pii_in_output_or_replacement_map(self):
         """3. Verify no raw PII appears in replacement_map or detections metadata."""
-        mock_llm = MockLLMClient(responses=[self.mock_llm_response, self.mock_llm_response])
+        mock_llm = MockLLMClient(responses=[self.mock_query_response, self.mock_llm_response])
 
         result = run_pipeline(self.sample_raw_incident, llm_client=mock_llm)
 
@@ -115,7 +132,7 @@ class TestPipeline(unittest.TestCase):
 
     def test_5_llm_client_resolution_at_pipeline_boundary(self):
         """5. Verify llm_client resolution behavior when None vs explicitly injected."""
-        mock_llm = MockLLMClient(responses=[self.mock_llm_response])
+        mock_llm = MockLLMClient(responses=[self.mock_query_response, self.mock_llm_response])
 
         # When injected explicitly, uses the injected client
         res = run_pipeline(self.sample_raw_incident, llm_client=mock_llm)
@@ -127,6 +144,71 @@ class TestPipeline(unittest.TestCase):
         res = run_pipeline("Simple incident with no offence", llm_client=empty_queries_mock)
         self.assertEqual(res["status"], "success")
 
+    def test_7_analysis_candidate_limit_truncates_analysis_context_to_7(self):
+        """7. Verify full RRF reranking produces candidate pool and exactly 7 candidates are passed to LLM analysis when >7 exist."""
+        mock_llm = MockLLMClient(responses=[self.mock_query_response, self.mock_llm_response])
+        res = run_pipeline(self.sample_raw_incident, llm_client=mock_llm, top_k_rerank=15, analysis_candidate_limit=7)
+
+        self.assertIn("reranked_candidates", res)
+        # Full reranked candidate pool contains up to 15 items
+        full_reranked = res["reranked_candidates"]
+        self.assertIsInstance(full_reranked, list)
+
+        # Inspect legal analysis prompt received by LLM
+        analysis_prompt = mock_llm.prompts_received[1]  # 2nd call is legal analysis prompt
+        self.assertIn("RETRIEVED BNS LEGAL CONTEXT:", analysis_prompt)
+
+        # Extract candidates passed in prompt JSON
+        m_ctx = re.search(r"RETRIEVED BNS LEGAL CONTEXT:\s*(\[.*\])", analysis_prompt, re.DOTALL)
+        self.assertIsNotNone(m_ctx)
+        sections = json.loads(m_ctx.group(1))
+        passed_docs = []
+        for sec in sections:
+            if "results" in sec:
+                passed_docs.extend(sec["results"])
+            elif "clauses" in sec:
+                passed_docs.extend(sec["clauses"])
+
+        if len(full_reranked) >= 7:
+            self.assertEqual(len(passed_docs), 7, "Exactly 7 candidates must be passed to LLM analysis when >=7 exist")
+            # Verify passed candidate IDs match top 7 of full reranked candidate pool
+            self.assertEqual(set(doc["id"] for doc in passed_docs), set(doc["id"] for doc in full_reranked[:7]))
+
+    def test_8_analysis_candidate_limit_preserves_fewer_than_7_candidates(self):
+        """8. Verify fewer than 7 candidates are preserved as-is without error or padding."""
+        mock_llm = MockLLMClient(responses=[self.mock_query_response, self.mock_llm_response])
+        res = run_pipeline(self.sample_raw_incident, llm_client=mock_llm, top_k_rerank=3, analysis_candidate_limit=7)
+
+        self.assertIn("reranked_candidates", res)
+        full_reranked = res["reranked_candidates"]
+        self.assertTrue(len(full_reranked) <= 3)
+
+        analysis_prompt = mock_llm.prompts_received[1]
+        m_ctx = re.search(r"RETRIEVED BNS LEGAL CONTEXT:\s*(\[.*\])", analysis_prompt, re.DOTALL)
+        sections = json.loads(m_ctx.group(1))
+        passed_docs = []
+        for sec in sections:
+            if "results" in sec:
+                passed_docs.extend(sec["results"])
+            elif "clauses" in sec:
+                passed_docs.extend(sec["clauses"])
+        self.assertEqual(len(passed_docs), len(full_reranked), "Fewer than 7 candidates must be preserved as-is")
+
+    def test_9_reranked_candidates_contains_authoritative_metadata(self):
+        """9. Verify reranked_candidates items contain target_clause_text, section_definition, and schedule_1 fields."""
+        mock_llm = MockLLMClient(responses=[self.mock_query_response, self.mock_llm_response])
+        res = run_pipeline(self.sample_raw_incident, llm_client=mock_llm)
+
+        self.assertIn("reranked_candidates", res)
+        reranked = res["reranked_candidates"]
+        self.assertGreater(len(reranked), 0)
+        first_cand = reranked[0]
+        self.assertIn("target_clause_text", first_cand)
+        self.assertIn("section_definition", first_cand)
+        self.assertIn("schedule_1", first_cand)
+        self.assertTrue(len(first_cand["target_clause_text"]) > 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

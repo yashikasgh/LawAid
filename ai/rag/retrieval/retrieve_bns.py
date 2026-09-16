@@ -12,7 +12,11 @@ import ollama
 # Configuration Constants
 EMBEDDING_MODEL = "nomic-embed-text"
 COLLECTION_NAME = "lawaid"
-DB_PATH = "ai/rag/data/chroma_db"
+# Use absolute path derived from this file's location so it works regardless of CWD
+# ai/rag/retrieval/ -> ai/rag/ -> ai/ -> project_root
+_RETRIEVAL_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _RETRIEVAL_DIR.parents[2]  # go up: retrieval -> rag -> ai -> project root
+DB_PATH = str(_PROJECT_ROOT / "ai" / "rag" / "data" / "chroma_db")
 TOP_K = 5
 
 
@@ -76,7 +80,8 @@ def retrieve(query: str, top_k: int = TOP_K, db_path: str = DB_PATH, collection_
 
     for idx in range(len(ids)):
         meta = metadatas[idx] if idx < len(metadatas) else {}
-        retrieved_items.append({
+        item_dict = dict(meta) if isinstance(meta, dict) else {}
+        item_dict.update({
             "rank": idx + 1,
             "id": ids[idx],
             "section": meta.get("section", ""),
@@ -85,6 +90,9 @@ def retrieve(query: str, top_k: int = TOP_K, db_path: str = DB_PATH, collection_
             "distance": float(distances[idx]) if idx < len(distances) else 0.0,
             "text": docs[idx] if idx < len(docs) else ""
         })
+        if not item_dict.get("target_clause_text") and item_dict.get("text"):
+            item_dict["target_clause_text"] = item_dict["text"]
+        retrieved_items.append(item_dict)
 
     return retrieved_items
 

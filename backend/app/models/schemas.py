@@ -5,6 +5,12 @@ class UserCreate(BaseModel):
     password: str
     role: str
 
+class UserLoginRequest(BaseModel):
+    """Login schema. User must provide the role of the portal they are logging in from."""
+    email: EmailStr
+    password: str
+    role: str
+
 class UserResponse(BaseModel):
     id: int
     email: str
@@ -15,3 +21,10 @@ class UserResponse(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str

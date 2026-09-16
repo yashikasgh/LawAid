@@ -11,4 +11,5 @@ class FIRRegistry(Base):
     officer_id = Column(Integer, nullable=False)
     station_code = Column(String, nullable=False)
     status = Column(String, default="registered")
+    complaint_text = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

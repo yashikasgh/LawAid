@@ -1,31 +1,149 @@
+import sys
+import time
+from pathlib import Path
+
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Depends
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from app.core.mongo import fs
+
+from app.core.mongo import mongo_available
+
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.services.fir_auth import register_fir, verify_fir
 from app.models.user import User
 from app.services.duplicate_check import check_duplicate
 
+# ---------------------------------------------------------------------------
+# Attempt to import the real BNS RAG retrieval pipeline and end-to-end analyzer.
+# run_pipeline: Sanitization -> NER -> Groq Queries -> ChromaDB -> Rerank -> Groq Legal Reasoning
+# ---------------------------------------------------------------------------
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]  # LawAid/
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+try:
+    from ai.rag.pipeline import run_pipeline as _run_pipeline  # type: ignore
+    _PIPELINE_AVAILABLE = True
+except Exception:
+    _PIPELINE_AVAILABLE = False
+
+try:
+    from ai.rag.retrieval.retrieve_bns import retrieve as _retrieve_bns  # type: ignore
+    _RAG_AVAILABLE = True
+except Exception:
+    _RAG_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
+
 router = APIRouter(prefix="/fir", tags=["fir"])
 
-@router.post("/generate")
-def generate_fir():
-    return {"fir_id": "STUB-001", "status": "not_implemented"}
+
+# ── Full Legal Incident Analysis (End-to-End AI Pipeline) ────────────────────
+
+class IncidentAnalysisRequest(BaseModel):
+    incident: str
+
+
+@router.post("/analyze")
+def analyze_incident_endpoint(body: IncidentAnalysisRequest):
+    """
+    Executes the end-to-end LawAid AI Legal Analysis Pipeline on raw incident text.
+    Handles Privacy Sanitization -> NER -> Query Generation -> Retrieval ->
+    Reranking -> LLM Grounded Analysis (Groq GPT-OSS 120B).
+
+    Returns structured analysis with offences, applicability, reasoning,
+    punishment, bailable/cognizable classifications, and privacy metadata.
+    """
+    raw_incident = body.incident.strip()
+    if len(raw_incident) < 5:
+        raise HTTPException(status_code=400, detail="Incident description is too short.")
+
+    if _PIPELINE_AVAILABLE:
+        try:
+            res = _run_pipeline(raw_incident=raw_incident)
+            return {"status": "ok", "source": "pipeline", "data": res}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"AI Pipeline Error: {str(e)}")
+    
+    raise HTTPException(status_code=500, detail="AI Pipeline module not found or unavailable.")
+
+
+# ── BNS Search ──────────────────────────────────────────────────────────────
+
+@router.get("/bns/search")
+def search_bns(query: str = Query(..., min_length=3)):
+    """
+    Returns BNS sections relevant to the citizen's complaint text.
+
+    Tries real RAG retrieval first (ChromaDB + Ollama).
+    Falls back to two hard-coded example results if the AI stack is not yet
+    set up locally (Ollama not installed / ChromaDB index not built).
+
+    Response shape (see shared/schemas/api_contracts.md):
+        { status, source, results: [{ rank, section, clause, title, text,
+                                      chapter, bailable, cognizable, similarity }] }
+    """
+    if _RAG_AVAILABLE:
+        try:
+            raw = _retrieve_bns(query=query, top_k=5)
+            results = []
+            for item in raw:
+                # ChromaDB cosine distance: 0 = identical, 1 = orthogonal.
+                # Convert to a 0–1 similarity score citizens can understand.
+                distance = float(item.get("distance", 1.0))
+                similarity = round(max(0.0, 1.0 - distance), 4)
+                meta = item  # retrieve() merges metadata into the item dict
+                results.append({
+                    "rank": item.get("rank", 0),
+                    "section": str(item.get("section", "")),
+                    "clause": item.get("clause", ""),
+                    "title": item.get("title", ""),
+                    "text": item.get("text", ""),
+                    "chapter": item.get("chapter", ""),
+                    "bailable": item.get("bailable", ""),
+                    "cognizable": item.get("cognizable", ""),
+                    "similarity": similarity,
+                })
+            # Filter out low-confidence matches
+            results = [r for r in results if r["similarity"] >= 0.30]
+            if not results:
+                return {"status": "insufficient_information", "source": "rag", "results": []}
+            return {"status": "ok", "source": "rag", "results": results}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"BNS Retrieval Error: {str(e)}")
+
+    raise HTTPException(status_code=500, detail="BNS Retrieval module not found or unavailable.")
+
+
+# ── FIR Upload ───────────────────────────────────────────────────────────────
 
 @router.post("/upload")
 async def upload_fir(file: UploadFile = File(...)):
     if file.content_type not in ["application/pdf", "image/jpeg", "image/png"]:
         raise HTTPException(status_code=400, detail="Only PDF, JPEG, PNG files allowed")
 
+    from app.core.mongo import mongo_available, fs as _fs
+    if not mongo_available or _fs is None:
+        raise HTTPException(
+            status_code=503,
+            detail="File storage (MongoDB/GridFS) is currently unavailable. Start MongoDB to enable document uploads."
+        )
+
     contents = await file.read()
-    file_id = fs.put(contents, filename=file.filename, content_type=file.content_type)
+    try:
+        file_id = _fs.put(contents, filename=file.filename, content_type=file.content_type)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"File storage failed: {str(e)}")
 
     return {
         "status": "uploaded",
         "file_id": str(file_id),
         "filename": file.filename,
     }
+
+
+# ── FIR Register ─────────────────────────────────────────────────────────────
 
 @router.post("/register")
 async def register_fir_route(
@@ -34,23 +152,37 @@ async def register_fir_route(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """
+    Register a FIR. Extracts text from the uploaded file and stores it as complaint_text
+    so duplicate detection can compare against it.
+    """
     contents = await file.read()
+
+    # Extract complaint text from the uploaded document (for duplicate detection)
+    extracted_text = ""
+    try:
+        extracted_text = _extract_text_with_ocr(contents, file.filename or "", file.content_type or "")
+    except Exception:
+        extracted_text = ""
+
     record = register_fir(
         db=db,
         file_bytes=contents,
         officer_id=current_user.id,
         station_code=station_code,
+        complaint_text=extracted_text[:2000] if extracted_text else None,  # Store up to 2000 chars
     )
     return {
         "fir_id": record.fir_id,
         "sha256_hash": record.sha256_hash,
         "status": record.status,
         "created_at": record.created_at,
+        "complaint_text_saved": bool(extracted_text),
     }
 
-@router.get("/{fir_id}")
-def get_fir(fir_id: str):
-    return {"fir_id": fir_id, "status": "not_implemented"}
+
+
+# ── FIR Verify ───────────────────────────────────────────────────────────────
 
 @router.post("/verify")
 async def verify_fir_route(
@@ -62,18 +194,399 @@ async def verify_fir_route(
     result = verify_fir(db=db, fir_id=fir_id, file_bytes=contents)
     return result
 
-@router.get("/bns/search")
-def search_bns(query: str = Query(..., min_length=3)):
-    mock_results = [
-        {"section": "318", "title": "Cheating", "similarity": 0.81},
-        {"section": "351", "title": "Criminal Intimidation", "similarity": 0.68},
+
+# ── Helper for BNS Section Detection ─────────────────────────────────────────
+
+import re
+
+def detect_bns_sections(text: str) -> list:
+    """
+    Detects BNS/IPC section references from OCR-extracted or document text.
+    Handles common formats:
+        Section 103, Section 103(a), Sec. 103, s. 103
+        u/s 103 BNS, U/S 115 BNS, Under Section 103
+        103 BNS, BNS 103
+    Returns a sorted deduplicated list of section number strings.
+    """
+    patterns = [
+        r'\bsec(?:tion)?\.?\s*(\d+(?:\([a-zA-Z0-9]+\))?)',   # Section 103, Sec. 103
+        r'\bu[/\\]s\s*(\d+(?:\([a-zA-Z0-9]+\))?)',            # u/s 103
+        r'\bunder\s+section\s+(\d+(?:\([a-zA-Z0-9]+\))?)',    # Under Section 103
+        r'\bBNS\s+(\d+(?:\([a-zA-Z0-9]+\))?)',                # BNS 103
+        r'\b(\d+(?:\([a-zA-Z0-9]+\)?)?)\s+BNS\b',            # 103 BNS
+        r'\bIPC\s+(\d+(?:\([a-zA-Z0-9]+\))?)',               # IPC 302 (legacy references)
     ]
-    top_result = mock_results[0]
-    if top_result["similarity"] < 0.72:
-        return {"status": "insufficient_information", "results": []}
-    return {"status": "ok", "results": mock_results}
+    found = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            sec = match.group(1).strip()
+            if sec and 1 <= int(re.match(r'\d+', sec).group()) <= 359:  # BNS has sections 1-358
+                found.add(sec)
+    return sorted(found, key=lambda x: int(re.match(r'\d+', x).group()))
+
+
+# ── Helper for OCR Extraction ────────────────────────────────────────────────
+
+def _extract_text_with_ocr(contents: bytes, filename: str, content_type: str) -> str:
+    filename_lower = (filename or "").lower()
+    content_type_lower = (content_type or "").lower()
+
+    is_pdf = content_type_lower == "application/pdf" or filename_lower.endswith(".pdf")
+    is_image = content_type_lower in ["image/jpeg", "image/png", "image/jpg"] or any(
+        filename_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png"]
+    )
+
+    if not is_pdf and not is_image:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Please upload a PDF document or JPG/PNG image."
+        )
+
+    extracted_text = ""
+
+    if is_pdf:
+        # 1. Native PDF text extraction with PyMuPDF
+        try:
+            import pymupdf
+            doc = pymupdf.open(stream=contents, filetype="pdf")
+            extracted_text = "\n".join([page.get_text() for page in doc]).strip()
+        except Exception:
+            extracted_text = ""
+
+        # 2. If native PDF text is < 15 chars, fallback to rendering page images and OCR
+        if len(extracted_text) < 15:
+            try:
+                import pymupdf
+                from rapidocr_onnxruntime import RapidOCR
+                engine = RapidOCR()
+                doc = pymupdf.open(stream=contents, filetype="pdf")
+                ocr_lines = []
+                for page in doc:
+                    pix = page.get_pixmap(dpi=150)
+                    img_bytes = pix.tobytes("png")
+                    result, _ = engine(img_bytes)
+                    if result:
+                        for line in result:
+                            if line and len(line) > 1 and line[1]:
+                                ocr_lines.append(str(line[1]))
+                extracted_text = "\n".join(ocr_lines).strip()
+            except Exception:
+                pass
+
+    elif is_image:
+        # Run RapidOCR directly on image bytes
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            engine = RapidOCR()
+            result, _ = engine(contents)
+            if result:
+                ocr_lines = [str(line[1]) for line in result if line and len(line) > 1 and line[1]]
+                extracted_text = "\n".join(ocr_lines).strip()
+        except Exception:
+            extracted_text = ""
+
+    return extracted_text
+
+
+@router.post("/understand")
+async def understand_fir(file: UploadFile = File(...)):
+    """
+    Accepts an uploaded FIR (PDF or image).
+    Extracts text using PyMuPDF and/or RapidOCR, processes legal analysis via existing AI RAG pipeline,
+    and returns plain-language summary, charges, entities, citizen rights, and next steps.
+    """
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="Uploaded file is invalid or missing filename.")
+
+    contents = await file.read()
+    if not contents or len(contents) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty. Please upload a valid FIR document or image.")
+
+    filename_lower = file.filename.lower()
+    content_type_lower = (file.content_type or "").lower()
+
+    is_pdf = content_type_lower == "application/pdf" or filename_lower.endswith(".pdf")
+    is_image = content_type_lower in ["image/jpeg", "image/png", "image/jpg"] or any(
+        filename_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png"]
+    )
+
+    if not is_pdf and not is_image:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Please upload a PDF document or JPG/PNG image."
+        )
+
+    # 1. Store in GridFS (reports storage status honestly — does not fake a file ID)
+    from app.core.mongo import mongo_available, fs as _mongo_fs
+    file_id = None
+    file_stored = False
+    if mongo_available and _mongo_fs is not None:
+        try:
+            file_id = str(_mongo_fs.put(contents, filename=file.filename, content_type=file.content_type))
+            file_stored = True
+        except Exception as store_err:
+            file_id = None
+            file_stored = False
+    # Note: file_stored=False is reported in response but does NOT block analysis
+
+    # 2. Text extraction & OCR
+    extracted_text = _extract_text_with_ocr(contents, file.filename, file.content_type)
+    detected_sections = detect_bns_sections(extracted_text) if extracted_text else []
+
+
+    if not extracted_text or len(extracted_text.strip()) < 15:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract readable text from the uploaded document or image. Please ensure the FIR copy or photo is clear and legible."
+        )
+
+    # 3. AI Pipeline Analysis (limit input text to 2500 chars)
+    if not _PIPELINE_AVAILABLE:
+        raise HTTPException(status_code=500, detail="AI Pipeline module not found or unavailable.")
+
+    try:
+        ai_res = _run_pipeline(raw_incident=extracted_text[:2500])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI Legal Analysis failed: {str(e)}")
+
+    charges_supported = []
+    charges_uncertain = []
+    full_analysis = []
+
+    for item in ai_res.get("analysis", []):
+        app_status = item.get("applicability", "supported" if item.get("status") == "Supported" else "uncertain")
+        entry = {
+            "section": str(item.get("section", "")),
+            "clause": item.get("clause", ""),
+            "title": item.get("title", ""),
+            "punishment": item.get("punishment", ""),
+            "bailable": item.get("bailable", ""),
+            "cognizable": item.get("cognizable", ""),
+            "court": item.get("court", ""),
+            "reasoning": item.get("reasoning", ""),
+            "applicability": app_status,
+            "status": item.get("status", ""),
+        }
+        full_analysis.append(entry)
+
+        if app_status == "supported":
+            charges_supported.append(entry)
+        elif app_status == "uncertain":
+            charges_uncertain.append(entry)
+
+    def _dedupe_charges(charge_list):
+        seen = set()
+        deduped = []
+        for c in charge_list:
+            sec = c.get("section", "").strip()
+            if sec and sec not in seen:
+                seen.add(sec)
+                deduped.append(c)
+        return deduped
+
+    display_charges = _dedupe_charges(charges_supported)
+    if not display_charges and charges_uncertain:
+        display_charges = _dedupe_charges(charges_uncertain)
+
+    active_titles = [c["title"] for c in display_charges if c.get("title")]
+
+    plain_summary = (
+        f"Official police complaint document recorded. The allegations involve "
+        f"{', '.join(active_titles) or 'cognizable offences'}.\n\n"
+        f"Key facts stated in FIR:\n"
+        + (extracted_text[:400] + ("..." if len(extracted_text) > 400 else ""))
+    )
+
+    rights = [
+        "Right to a free copy of the First Information Report (FIR) immediately under Section 173 BNSS.",
+        "Right to know the full grounds of arrest and whether offences are bailable or non-bailable.",
+        "Right to consult and be defended by a legal practitioner of your choice (Article 22(1) of the Constitution).",
+        "Right to free legal assistance if unable to afford counsel (NALSA / Legal Services Authority).",
+        "Protection against unlawful detention beyond 24 hours without production before a Magistrate (Section 58 BNSS).",
+    ]
+
+    next_steps = [
+        "Carefully verify all allegations, dates, times, and witness names mentioned in the FIR.",
+        "If offences are marked Non-Bailable, consult an advocate immediately to file for Anticipatory Bail under Section 482 BNSS.",
+        "Contact the District Legal Services Authority (DLSA) or call Helpline 15100 for free assistance.",
+        "Keep multiple physical copies and preserve timestamped digital evidence (calls, receipts, CCTV footage).",
+    ]
+
+    disclaimer_text = ai_res.get(
+        "disclaimer",
+        "Legal analysis provided by LawAid AI is for informational and educational purposes only. It does not constitute formal legal advice or substitute for consultation with a qualified legal professional."
+    )
+
+    return {
+        "status": "ok",
+        "file_id": file_id,
+        "file_stored": file_stored,
+        "filename": file.filename,
+        "extracted_text": extracted_text[:1200],
+        "detected_sections": detected_sections,  # BNS sections found in document text
+        "entities": ai_res.get("privacy_metadata", {}).get("detections", []),
+        "summary": plain_summary,
+        "charges": display_charges,
+        "uncertain_provisions": charges_uncertain,
+        "analysis": full_analysis,
+        "rights": rights,
+        "next_steps": next_steps,
+        "disclaimer": disclaimer_text,
+    }
+
+
+
+# ── FIR Get / Generate (P1 Task 7) ───────────────────────────────────────────
+
+class FIRGenerateRequest(BaseModel):
+    complaint: str
+    station_code: str = "PS001"
+    district: str = "Central"
+    complainant_name: str = "Protected / Citizen"
+
+
+@router.post("/generate")
+def generate_fir(body: FIRGenerateRequest = None):
+    """
+    Generates a formal First Information Report (FIR) draft as a PDF.
+    Returns official FIR ID (UUID4-based), SHA-256 hash, and download URL.
+    """
+    import hashlib
+    import uuid
+    import datetime
+    import io
+    import textwrap
+    try:
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import A4
+    except ImportError:
+        raise HTTPException(status_code=500, detail="PDF generation module (reportlab) not installed. Run: pip install reportlab")
+
+    now = datetime.datetime.now()
+    year = now.year
+
+    # UUID4-based FIR ID — unpredictable and globally unique
+    fir_uuid = uuid.uuid4().hex[:8].upper()
+    fir_id = f"FIR/{year}/{fir_uuid}"
+
+    complaint_text = body.complaint if body and body.complaint else "General complaint lodged."
+    complainant_name = body.complainant_name if body and body.complainant_name else "Protected / Citizen"
+    station_code = body.station_code if body else "PS001"
+
+    # Build PDF in memory
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(50, height - 50, "FIRST INFORMATION REPORT (FIR)")
+    c.setFont("Helvetica", 11)
+    c.drawString(50, height - 80, f"FIR ID: {fir_id}")
+    c.drawString(50, height - 100, f"Date: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    c.drawString(50, height - 120, f"Police Station: {station_code}")
+    c.drawString(50, height - 140, f"Complainant: {complainant_name}")
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(50, height - 170, "Incident Description:")
+    c.setFont("Helvetica", 10)
+
+    lines = textwrap.wrap(complaint_text, width=85)
+    y_pos = height - 190
+    for line in lines:
+        c.drawString(50, y_pos, line)
+        y_pos -= 15
+        if y_pos < 100:
+            c.showPage()
+            c.setFont("Helvetica", 10)
+            y_pos = height - 50
+
+    c.save()
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+
+    sha256_hash = hashlib.sha256(pdf_bytes).hexdigest()
+
+    # Store in MongoDB/GridFS — report honestly whether it succeeded
+    from app.core.mongo import mongo_available, fs as _mongo_fs
+    file_id = None
+    file_stored = False
+    if mongo_available and _mongo_fs is not None:
+        try:
+            file_id = str(_mongo_fs.put(
+                pdf_bytes,
+                filename=f"{fir_id.replace('/', '_')}.pdf",
+                content_type="application/pdf",
+                metadata={"fir_id": fir_id, "sha256_hash": sha256_hash}
+            ))
+            file_stored = True
+        except Exception:
+            file_id = None
+            file_stored = False
+
+    return {
+        "fir_id": fir_id,
+        "status": "draft_created",
+        "sha256_hash": sha256_hash,
+        "created_at": now.isoformat(),
+        "station_code": station_code,
+        "district": body.district if body else "Central",
+        "file_stored": file_stored,
+        "pdf_url": f"/api/fir/download/{file_id}" if file_id else None,
+        "summary": f"Draft FIR registered under ID {fir_id}. Ready for official review and station stamp.",
+    }
+
+
+from fastapi.responses import StreamingResponse
+
+@router.get("/download/{file_id}")
+def download_fir(file_id: str):
+    """Download a stored FIR PDF from MongoDB/GridFS."""
+    from app.core.mongo import mongo_available, fs as _mongo_fs
+    if not mongo_available or _mongo_fs is None:
+        raise HTTPException(
+            status_code=503,
+            detail="File storage (MongoDB) is unavailable. Cannot retrieve files."
+        )
+    from bson.objectid import ObjectId
+    try:
+        file_data = _mongo_fs.get(ObjectId(file_id))
+        return StreamingResponse(
+            file_data,
+            media_type=file_data.content_type or "application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={file_data.filename}"}
+        )
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not found or invalid file ID.")
+
+
+@router.get("/{fir_id}")
+def get_fir(fir_id: str, db: Session = Depends(get_db)):
+    from app.models.fir_registry import FIRRegistry
+    record = db.query(FIRRegistry).filter(FIRRegistry.fir_id == fir_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="FIR not found")
+    
+    return {
+        "fir_id": record.fir_id,
+        "sha256_hash": record.sha256_hash,
+        "officer_id": record.officer_id,
+        "station_code": record.station_code,
+        "status": record.status,
+        "created_at": record.created_at,
+        "complaint_text": record.complaint_text,
+    }
+
+
+# ── Duplicate Check ──────────────────────────────────────────────────────────
+
+class DuplicateCheckRequest(BaseModel):
+    complaint_text: str
+
 
 @router.post("/check-duplicate")
-def check_duplicate_route(complaint_text: str, db: Session = Depends(get_db)):
-    result = check_duplicate(db, complaint_text)
-    return result
+def check_duplicate_route(body: DuplicateCheckRequest, db: Session = Depends(get_db)):
+    """
+    Checks whether a complaint is likely a duplicate of an existing FIR.
+    Accepts a JSON body { complaint_text } (not a query parameter).
+    """
+    result = check_duplicate(db, body.complaint_text)
+    return result
