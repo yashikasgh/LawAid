@@ -451,10 +451,10 @@ export default function NewFIRPage() {
       const token = localStorage.getItem('access_token')
       const draftId = sessionStorage.getItem('lawaid_draft_id')
       if (draftId) {
-        draftPayload.draft_id = draftId
+        (draftPayload as any).draft_id = draftId
       }
       
-      const res = await fetch('http://localhost:8000/api/fir/drafts', {
+      const res = await fetch('http://localhost:8000/fir/drafts', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
