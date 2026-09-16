@@ -36,7 +36,7 @@ export default function LoginPage() {
       if (err?.response?.status === 401) {
         setError("Invalid email or password. Please try again.")
       } else if (err?.response?.status === 422) {
-        setError("Something is missing from the request — check role/email/password.")
+        setError("Something is missing from the request â€” check role/email/password.")
       } else {
         setError("Something went wrong. Please try again.")
       }
@@ -122,7 +122,7 @@ export default function LoginPage() {
             Law<span className="text-[#b98528]">Aid</span>
           </span>
           <span className="mt-1 text-[6px] sm:text-[7px] tracking-[0.22em] uppercase text-[#56718f]">
-            KNOW • UNDERSTAND • GET HELP
+            KNOW â€¢ UNDERSTAND â€¢ GET HELP
           </span>
         </div>
       </div>
@@ -181,7 +181,7 @@ export default function LoginPage() {
                 <input
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                   type="password"
                   className="w-full border border-[#cbd5e1] rounded-xl px-5 py-3.5 mt-2 text-[17px] text-[#12335B] bg-white/80 placeholder:text-[#9aa7b8] focus:ring-2 focus:ring-[#1d5da5]/30 focus:border-[#1d5da5] outline-none"
                 />
@@ -196,7 +196,7 @@ export default function LoginPage() {
                     value={newPassword}
                     onChange={e => setNewPassword(e.target.value)}
                     type="password"
-                    placeholder="••••••••"
+                    placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                     className="w-full border border-[#cbd5e1] rounded-xl px-5 py-3.5 mt-2 text-[17px] text-[#12335B] bg-white/80 placeholder:text-[#9aa7b8] outline-none"
                   />
                 </div>
@@ -206,7 +206,7 @@ export default function LoginPage() {
                     value={confirmPassword}
                     onChange={e => setConfirmPassword(e.target.value)}
                     type="password"
-                    placeholder="••••••••"
+                    placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                     className="w-full border border-[#cbd5e1] rounded-xl px-5 py-3.5 mt-2 text-[17px] text-[#12335B] bg-white/80 placeholder:text-[#9aa7b8] outline-none"
                   />
                 </div>

@@ -50,6 +50,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-lawaid}:${POSTGRES_PASSWORD:-lawaid123}@postgres:5432/${POSTGRES_DB:-lawaid}
       - MONGO_URL=mongodb://mongo:27017/lawaid
+      - OLLAMA_HOST=http://host.docker.internal:11434
     ports:
       - "8000:8000"
 
