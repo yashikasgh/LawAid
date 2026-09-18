@@ -652,7 +652,7 @@ class MultiProviderLLMFailoverClient(LLMClient):
             except Exception as e:
                 print(f"[LLM Failover Config Warning] Groq 120B init skipped: {e}")
 
-        # 3. OpenRouter Default Router
+        # 4. OpenRouter Default Router
         if openrouter_key:
             try:
                 chain.append(OpenRouterLLMClient(api_key=openrouter_key))
@@ -940,19 +940,28 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any], minimal_schema:
         "- The incident is the ONLY source of factual evidence.\n"
         "- The candidate text is the ONLY source of statutory requirements.\n"
         "- A mandatory requirement MUST NOT be classified as satisfied merely because it is compatible, plausible, or because another element is satisfied.\n"
-        "- Do NOT infer missing facts.\n"
+        "- Do NOT infer missing facts. Invalid reasoning examples:\n"
+        "  * 'Property stolen, therefore offender was a clerk' (INVALID - missing capacity)\n"
+        "  * 'Property involved, therefore property mark existed' (INVALID - missing object)\n"
+        "  * 'Accident occurred, therefore death occurred' (INVALID - missing consequence)\n"
+        "  * 'Dishonest conversion, therefore property was lost' (INVALID - missing state)\n"
+        "  * 'Physical force occurred, therefore every assault provision applies' (INVALID - missing specific context)\n"
         "- Require affirmative factual evidence for all material prerequisites.\n\n"
         "PASS 3 — CORE VS CONDITIONAL STRUCTURE:\n"
         "- Preserve Core vs Conditional architecture.\n"
         "- A missing conditional proviso MUST NOT invalidate an otherwise supported core offence definition.\n"
-        "- If the property value is UNSTATED or MISSING from the facts, mark that specific proviso candidate document as 'uncertain' or 'not_supported'.\n\n"
-        "PASS 4 — STRICT APPLICABILITY DECISION:\n"
-        "- 'supported': ALL mandatory core elements affirmatively satisfied, NO mandatory core element contradicted.\n"
-        "- 'not_supported': Mandatory requirement explicitly contradicted OR a mandatory special prerequisite is absent.\n"
-        "- 'uncertain': Material requirement could be true but incident simply lacks enough information.\n"
+        "- If the property value is UNSTATED or MISSING from the facts, mark that specific proviso candidate document as 'uncertain' or 'not_supported'.\n"
         "- Section 331 BNS requires lurking house-trespass or house-breaking (active concealment, stealth, breaking doors/windows/locks, or forcible entry). Unauthorized entry into a house alone constitutes house-trespass under Section 329. If the incident facts state unauthorized entry without affirmative evidence of lurking or breaking, mark Section 329 as 'supported' and mark Section 331 as 'uncertain' or 'not_supported'.\n\n"
+        "PASS 4 — STRICT APPLICABILITY DECISION:\n"
+        "- 'supported': ALL mandatory core elements affirmatively satisfied, NO mandatory core element contradicted, required mens rea supported by facts, required capacity/relationship supported when required.\n"
+        "- 'not_supported': Mandatory requirement explicitly contradicted OR a mandatory special prerequisite (such as special capacity, specific object/instrumentality, or specific statutory outcome) is absent from the stated incident facts.\n"
+        "- 'uncertain': Material requirement could be true but incident simply lacks enough information to establish it.\n"
+        "- Be conservative with 'supported'. Do NOT convert every unknown into 'not_supported' automatically. Preserve 'uncertain' where appropriate.\n\n"
         "PASS 5 — CANDIDATE RELATIONSHIP ANALYSIS:\n"
-        "- Determine candidate relationships (specific_over_general, ancillary_conduct, mutually_exclusive, etc.).\n\n"
+        "After evaluating candidates independently, perform a separate generic relationship analysis across retrieved candidates:\n"
+        "- Determine candidate relationships (specific_over_general, ancillary_conduct, mutually_exclusive, etc.).\n"
+        "- Only suppress a candidate when statutory text AND incident facts justify that relationship.\n"
+        "- Explain the statutory basis for any relationship decision.\n\n"
         "PASS 6 — FINAL CLASSIFICATION & STRUCTURED OUTPUT:\n"
         "Return structured JSON matching the schema.\n\n"
         "JSON OUTPUT SCHEMA FORMAT:\n"
@@ -1295,7 +1304,6 @@ def analyze_incident(
         if workload == Workload.LEGAL_CHAT:
             p_info = getattr(llm_client, "active_provider_info", {})
             print(f"[LEGAL_CHAT DIAGNOSTIC] provider={p_info} raw_length={len(raw_output)} raw_prefix={repr(raw_output[:500])}")
-
         parsed_json = _parse_json_from_llm(raw_output)
 
         if workload == Workload.LEGAL_CHAT and parsed_json and isinstance(parsed_json, dict):
@@ -1340,7 +1348,6 @@ def analyze_incident(
         g_analysis = result.get("analysis", [])
         g_ids = [item.get("evidence", [{}])[0].get("document_id") or item.get("section") for item in g_analysis if isinstance(item, dict)]
         print(f"[LEGAL_CHAT DIAGNOSTIC] grounded_items={len(g_analysis)} ids={g_ids} limitations={result.get('limitations', [])}")
-
     if hasattr(llm_client, "active_provider_info") and llm_client.active_provider_info:
         result["provider_used"] = llm_client.active_provider_info
     if hasattr(llm_client, "last_execution_trace") and llm_client.last_execution_trace:

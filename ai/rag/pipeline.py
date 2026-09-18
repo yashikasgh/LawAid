@@ -238,8 +238,6 @@ def pack_candidates_by_section(
         "capacity_reached": capacity_reached,
         "total_tokens_estimated": current_tokens
     }
-
-
 def run_pipeline(
     raw_incident: str,
     llm_client: Optional[LLMClient] = None,
@@ -765,10 +763,9 @@ def run_chat_pipeline(
         bot_reply = bot_reply.replace("Bihar National Security", "Bharatiya Nyaya Sanhita")
 
     bot_reply = re.sub(r'\bIPC\b', 'BNS', bot_reply)
-    bot_reply = re.sub(r'Indian Penal Code', 'Bharatiya Nyaya Sanhita, 2023', bot_reply, flags=re.IGNORECASE)
+    bot_reply = re.sub(r'Indian Penal Code', 'Bharatiya Nagarik Suraksha Sanhita, 2023', bot_reply, flags=re.IGNORECASE)
 
     bot_reply = sanitize_and_validate_legal_chat_reply(bot_reply, structured_chat_context)
-
     bot_reply = re.sub(r'  +', ' ', bot_reply).strip()
 
     return {

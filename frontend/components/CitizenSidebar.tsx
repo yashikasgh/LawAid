@@ -5,7 +5,6 @@ import { usePathname } from 'next/navigation'
 
 const links = [
   { href: '/citizen', icon: '🏠', label: 'Dashboard' },
-  { href: '/citizen/complaint', icon: '📝', label: 'File Complaint' },
   { href: '/citizen/understand', icon: '📄', label: 'My FIRs' },
   { href: '/citizen/chat', icon: '💬', label: 'Legal Chat' },
   { href: '/bns-search', icon: '🔍', label: 'BNS Search' },

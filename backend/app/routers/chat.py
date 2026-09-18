@@ -234,4 +234,3 @@ def get_history(session_id: str, current_user: User = Depends(get_current_user),
         except Exception:
             messages = []
         return {"session_id": session_id, "messages": messages}
-

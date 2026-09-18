@@ -241,6 +241,12 @@ def test_chat_session_history():
     assert len(messages[1]["content"]) > 0
 
 
+def test_chat_empty_message_returns_400():
+    res = client.post("/chat/message", json={"message": "   "})
+    assert res.status_code == 400
+    assert "Message cannot be empty" in res.json()["detail"]
+
+
 def test_chat_theft():
     res = client.post("/chat/message", json={"message": "Someone stole my phone."})
     assert res.status_code == 200

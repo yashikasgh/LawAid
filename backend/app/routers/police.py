@@ -335,8 +335,6 @@ def generate_fir(body: GenerateFIRRequest, current_user: User = Depends(require_
     import base64
     from ai.rag.pipeline import run_pipeline
     from ai.fir_engine.fir_ai_generator import generate_structured_fir
-    from ai.fir_engine.fir_pdf_generator import generate_fir_pdf
-
     incident_text = (body.incident or "").strip()
     if len(incident_text) < 10:
         raise HTTPException(status_code=400, detail="Incident description must contain at least 10 characters.")

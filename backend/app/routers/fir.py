@@ -447,9 +447,6 @@ async def understand_fir(file: UploadFile = File(...)):
     }
 
 
-
-# ── FIR Get / Generate (P1 Task 7) ───────────────────────────────────────────
-
 class FIRGenerateRequest(BaseModel):
     complaint: str
     station_code: str = "PS001"

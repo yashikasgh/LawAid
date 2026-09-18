@@ -1562,7 +1562,6 @@ class TestWorkloadAwareRoutingAndHealth(unittest.TestCase):
         self.assertEqual(res["status"], "success")
         self.assertEqual(res["analysis"][0]["document_id"], "bns_303")
 
-
 if __name__ == "__main__":
     unittest.main()
 
