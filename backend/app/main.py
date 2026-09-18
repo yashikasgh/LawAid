@@ -24,12 +24,16 @@ app.add_middleware(
 )
 
 app.middleware("http")(audit_log_middleware)
-app.include_router(auth.router)
-app.include_router(fir.router)
-app.include_router(police.router)
-app.include_router(chat.router)
-app.include_router(complaints.router)
-app.include_router(fir_drafts.router)
+
+# Core Routers (Mounted directly and under /api prefix for 100% frontend API route compatibility)
+from fastapi import APIRouter
+api_router = APIRouter(prefix="/api")
+
+for _r in [auth.router, fir.router, police.router, chat.router, complaints.router, fir_drafts.router]:
+    api_router.include_router(_r)
+    app.include_router(_r)
+
+app.include_router(api_router)
 
 @app.get("/health")
 def health_check():
