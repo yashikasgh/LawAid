@@ -20,6 +20,7 @@ type UnderstandResponse = {
   extracted_text?: string
   summary: string
   charges: ChargeItem[]
+  reference_provisions?: ChargeItem[]
   rights: string[]
   next_steps: string[]
 }
@@ -284,6 +285,64 @@ export default function UnderstandPage() {
                                 </span>
                               )}
 
+                            </div>
+
+                            {c.punishment && (
+                              <p className="text-xs text-gray-600">
+                                <strong className="text-gray-800">
+                                  Punishment:
+                                </strong>{' '}
+                                {c.punishment}
+                              </p>
+                            )}
+
+                            {c.reasoning && (
+                              <p className="text-xs text-gray-500 mt-1 italic">
+                                {c.reasoning}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Reference Provisions (Fallback Path) */}
+                  {result.reference_provisions && result.reference_provisions.length > 0 && (
+                    <div className="bg-slate-50/80 border border-slate-200 rounded-[16px] p-5 space-y-3">
+                      <div>
+                        <h3 className="font-serif font-bold text-[#12335B] text-base mb-1">
+                          Retrieved BNS Provisions for Reference
+                        </h3>
+                        <p className="text-xs text-slate-600 leading-relaxed mb-3">
+                          These provisions were retrieved from the BNS database but were not validated against the facts because automated legal analysis was unavailable.
+                        </p>
+                      </div>
+
+                      <div className="space-y-3">
+                        {result.reference_provisions.map((c, idx) => (
+                          <div
+                            key={idx}
+                            className="border border-[#12335B]/10 rounded-[16px] p-4 bg-white/80 shadow-sm"
+                          >
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
+                              <span className="font-bold text-[#12335B] text-sm">
+                                §{c.section} — {c.title}
+                              </span>
+
+                              {c.bailable && (
+                                <span
+                                  className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${
+                                    c.bailable
+                                      .toLowerCase()
+                                      .includes('non')
+                                      ? 'bg-red-50 text-red-700 border-red-200'
+                                      : 'bg-green-50 text-green-700 border-green-200'
+                                  }`}
+                                >
+                                  {c.bailable}
+                                </span>
+                              )}
                             </div>
 
                             {c.punishment && (

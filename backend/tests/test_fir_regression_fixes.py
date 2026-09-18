@@ -218,9 +218,8 @@ def test_analysis_unavailable_pipeline_status():
 
     res = run_pipeline(DEMO_INCIDENT, llm_client=FailingLLMClient())
     assert res.get("status") == "analysis_unavailable"
-    assert res.get("analysis") == []
-    assert len(res.get("limitations", [])) > 0
-    assert "temporarily unavailable" in res.get("limitations")[0]
+    assert res.get("source") == "retrieval_fallback"
+    assert len(res.get("analysis", [])) > 0
 
 
 def test_a_query_coverage_for_road_accident():

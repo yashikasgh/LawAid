@@ -133,6 +133,10 @@ def build_legal_context(ner_result: Dict[str, Any], retrieval_result: Dict[str, 
 
             doc_id = doc.get("document_id") or doc.get("id") or ""
 
+            raw_target = clause_parts["target_clause_text"] or doc.get("target_clause_text", "")
+            if not raw_target and raw_doc_text:
+                raw_target = raw_doc_text[:350] + ("..." if len(raw_doc_text) > 350 else "")
+
             formatted_item = {
                 "rank": doc.get("rank"),
                 "id": doc_id,
@@ -141,7 +145,7 @@ def build_legal_context(ner_result: Dict[str, Any], retrieval_result: Dict[str, 
                 "clause": clause_str,
                 "title": doc.get("title", ""),
                 "distance": doc.get("distance"),
-                "target_clause_text": clause_parts["target_clause_text"] or doc.get("target_clause_text", raw_doc_text),
+                "target_clause_text": raw_target,
                 "section_definition": clause_parts["section_definition"] or doc.get("section_definition", ""),
                 "schedule_1": schedule_1,
                 "text": raw_doc_text

@@ -161,14 +161,18 @@ class TestPipeline(unittest.TestCase):
         # Extract candidates passed in prompt JSON
         m_ctx = re.search(r"RETRIEVED BNS LEGAL CONTEXT:\s*(\[.*\])", analysis_prompt, re.DOTALL)
         self.assertIsNotNone(m_ctx)
-        groups = json.loads(m_ctx.group(1))
-        passed_docs = groups[0]["results"]
+        sections = json.loads(m_ctx.group(1))
+        passed_docs = []
+        for sec in sections:
+            if "results" in sec:
+                passed_docs.extend(sec["results"])
+            elif "clauses" in sec:
+                passed_docs.extend(sec["clauses"])
 
         if len(full_reranked) >= 7:
             self.assertEqual(len(passed_docs), 7, "Exactly 7 candidates must be passed to LLM analysis when >=7 exist")
-            # Verify passed candidates match top 7 of full reranked candidate pool
-            for i in range(7):
-                self.assertEqual(passed_docs[i]["id"], full_reranked[i]["id"])
+            # Verify passed candidate IDs match top 7 of full reranked candidate pool
+            self.assertEqual(set(doc["id"] for doc in passed_docs), set(doc["id"] for doc in full_reranked[:7]))
 
     def test_8_analysis_candidate_limit_preserves_fewer_than_7_candidates(self):
         """8. Verify fewer than 7 candidates are preserved as-is without error or padding."""
@@ -181,8 +185,13 @@ class TestPipeline(unittest.TestCase):
 
         analysis_prompt = mock_llm.prompts_received[1]
         m_ctx = re.search(r"RETRIEVED BNS LEGAL CONTEXT:\s*(\[.*\])", analysis_prompt, re.DOTALL)
-        groups = json.loads(m_ctx.group(1))
-        passed_docs = groups[0]["results"]
+        sections = json.loads(m_ctx.group(1))
+        passed_docs = []
+        for sec in sections:
+            if "results" in sec:
+                passed_docs.extend(sec["results"])
+            elif "clauses" in sec:
+                passed_docs.extend(sec["clauses"])
         self.assertEqual(len(passed_docs), len(full_reranked), "Fewer than 7 candidates must be preserved as-is")
 
     def test_9_reranked_candidates_contains_authoritative_metadata(self):
@@ -199,7 +208,142 @@ class TestPipeline(unittest.TestCase):
         self.assertIn("schedule_1", first_cand)
         self.assertTrue(len(first_cand["target_clause_text"]) > 0)
 
+    def test_10_chat_pipeline_history_and_sentiment(self):
+        """10. Verify run_chat_pipeline accepts history, performs sentiment detection, and reduces LLM calls."""
+        from ai.rag.pipeline import run_chat_pipeline
+
+        class DynamicMockLLM(MockLLMClient):
+            def generate(self, prompt, max_tokens=None, **kwargs):
+                self.prompts_received.append(prompt)
+                self.call_count += 1
+                if "RETRIEVED BNS LEGAL CONTEXT:" in prompt:
+                    m = re.search(r'"id":\s*"([^"]+)"', prompt)
+                    doc_id = m.group(1) if m else "bns_252"
+                    return json.dumps({
+                        "status": "success",
+                        "analysis": [
+                            {
+                                "document_id": doc_id,
+                                "applicability": "supported",
+                                "reasoning": "The accused took property without permission."
+                            }
+                        ],
+                        "limitations": []
+                    })
+                return json.dumps({"reply": "I am sorry to hear you experienced this. Section 252 applies."})
+
+        mock_llm = DynamicMockLLM()
+
+        history = [
+            {"role": "user", "content": "Rahul took a mobile phone belonging to Vijay without permission."},
+            {"role": "assistant", "content": "I understand."}
+        ]
+        res = run_chat_pipeline("What is the punishment?", history=history, llm_client=mock_llm)
+
+        self.assertEqual(res["status"], "ok")
+        self.assertIn("reply", res)
+        # Verify exactly 2 LLM calls made (Analysis + Synthesis), skipping query generator LLM
+        self.assertEqual(len(mock_llm.prompts_received), 2)
+        # Check history passed to synthesis prompt
+        synthesis_prompt = mock_llm.prompts_received[1]
+        self.assertIn("CONVERSATION HISTORY:", synthesis_prompt)
+        self.assertIn("COMMUNICATION TONE & EMPATHY:", synthesis_prompt)
+
+    def test_11_chat_pipeline_fallback_clean_response(self):
+        """11. Verify fallback response in run_chat_pipeline returns concise safe response without dumping raw retrieval candidates."""
+        from ai.rag.pipeline import run_chat_pipeline
+        # Mock LLM that raises an error (simulating offline/failover failure)
+        class FailingLLMClient(MockLLMClient):
+            def generate(self, prompt, **kwargs):
+                raise RuntimeError("All LLM providers failed")
+
+        failing_llm = FailingLLMClient()
+        res = run_chat_pipeline("Someone stole my phone.", llm_client=failing_llm)
+
+        self.assertEqual(res["status"], "ok")
+        self.assertIn("reply", res)
+        self.assertIn("LawAid could not complete the legal analysis right now", res["reply"])
+        self.assertEqual(res["sections"], [])
+        self.assertNotIn("Identified Offences", res["reply"])
+
+    def test_12_chat_pipeline_grounding_filters_unsupported_sections(self):
+        """12. Verify unsupported/uncertain sections do not reach Chat formatted_sections recommendation."""
+        from ai.rag.pipeline import run_chat_pipeline
+
+        class AnalysisWithUncertainMock(MockLLMClient):
+            def generate(self, prompt, **kwargs):
+                self.prompts_received.append(prompt)
+                if "RETRIEVED BNS LEGAL CONTEXT:" in prompt:
+                    return json.dumps({
+                        "status": "success",
+                        "analysis": [
+                            {
+                                "document_id": "bns_303_303(2)",
+                                "applicability": "supported",
+                                "reasoning": "Theft of mobile phone."
+                            },
+                            {
+                                "document_id": "bns_329_329(1)",
+                                "applicability": "not_supported",
+                                "reasoning": "No house trespass occurred."
+                            }
+                        ],
+                        "limitations": []
+                    })
+                return json.dumps({"reply": "Section 303 applies for theft of mobile phone."})
+
+        mock_llm = AnalysisWithUncertainMock()
+        res = run_chat_pipeline("Someone stole my phone.", llm_client=mock_llm)
+
+        self.assertEqual(res["status"], "ok")
+        # Only supported sections should be in res["sections"]
+        self.assertTrue(any("303" in s for s in res["sections"]))
+        self.assertFalse(any("329" in s for s in res["sections"]))
+
+    def test_13_chat_pipeline_multiturn_history_and_20000_rupees_context(self):
+        """13. Verify 3-turn follow-up history (including ₹20,000 cost context) is preserved and passed to RAG."""
+        from ai.rag.pipeline import run_chat_pipeline
+
+        class MultiturnMock(MockLLMClient):
+            def generate(self, prompt, max_tokens=None, **kwargs):
+                self.prompts_received.append(prompt)
+                if "RETRIEVED BNS LEGAL CONTEXT:" in prompt:
+                    m = re.search(r'"id":\s*"([^"]+)"', prompt)
+                    doc_id = m.group(1) if m else "bns_303"
+                    return json.dumps({
+                        "status": "success",
+                        "analysis": [
+                            {
+                                "document_id": doc_id,
+                                "applicability": "supported",
+                                "reasoning": "Theft of phone valued at 20,000 rupees."
+                            }
+                        ],
+                        "limitations": []
+                    })
+                return json.dumps({"reply": "The punishment for theft of property worth 20,000 rupees under BNS Section 303(2) is up to 3 years imprisonment or fine."})
+
+        mock_llm = MultiturnMock()
+        history = [
+            {"role": "user", "content": "Someone stole my phone."},
+            {"role": "assistant", "content": "This falls under theft under Section 303 of BNS."},
+            {"role": "user", "content": "What punishment can they get?"},
+            {"role": "assistant", "content": "The punishment depends on the value of the property."}
+        ]
+
+        turn_3_msg = "What if the phone cost 20,000 rupees?"
+        res = run_chat_pipeline(turn_3_msg, history=history, llm_client=mock_llm)
+
+        self.assertEqual(res["status"], "ok")
+        self.assertIn("20,000", res["reply"])
+
+        # Check prompt sent to legal analyzer contained effective incident combining user history
+        analysis_prompt = mock_llm.prompts_received[0]
+        self.assertIn("20,000 rupees", analysis_prompt)
+        self.assertIn("Someone stole my phone", analysis_prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

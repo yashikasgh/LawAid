@@ -37,7 +37,8 @@ from legal_analyzer import (
     ProviderHealthStatus,
     GLOBAL_HEALTH_TRACKER,
     estimate_tokens,
-    GROQ_SAFE_REQUEST_TOKEN_BUDGET
+    GROQ_SAFE_REQUEST_TOKEN_BUDGET,
+    _parse_json_from_llm
 )
 from context_builder import build_legal_context
 from ai.rag.retrieval.query_generator import generate_queries
@@ -240,6 +241,16 @@ class TestLegalAnalyzer(unittest.TestCase):
         self.assertEqual(res["analysis"], [])
         self.assertEqual(res["limitations"], ["No applicable provisions found."])
 
+    def test_legal_chat_prompt_requires_exact_retrieved_document_ids(self):
+        """Verify minimal_schema prompt explicitly instructs LLM to copy exact document_id string."""
+        ctx = build_legal_context(self.sample_ner, self.sample_retrieval)
+        prompt = construct_analysis_prompt(ctx, minimal_schema=True)
+
+        self.assertIn("STRICT GROUNDING & DOCUMENT ID RULES:", prompt)
+        self.assertIn("Every document_id in your response MUST be copied EXACTLY as shown in the \"id\" field", prompt)
+        self.assertIn("Do NOT return a bare section number such as \"303\" or \"304\"", prompt)
+        self.assertIn('"document_id": "<exact_id_from_retrieved_context>"', prompt)
+
     def test_10_ollama_llm_client_configuration_error(self):
         """Test 10: OllamaLLMClient raises clear configuration error if no model is set."""
         client = OllamaLLMClient(model_name=None)
@@ -293,7 +304,7 @@ class TestLegalAnalyzer(unittest.TestCase):
             model=client.model_name,
             messages=[{"role": "user", "content": "Test prompt"}],
             temperature=0.0,
-            response_format={"type": "json_object"}
+            timeout=45.0
         )
 
     @unittest.mock.patch("groq.Groq")
@@ -869,20 +880,20 @@ class TestLegalAnalyzer(unittest.TestCase):
         # Parse RETRIEVED BNS LEGAL CONTEXT JSON from prompt
         m_ctx = re.search(r"RETRIEVED BNS LEGAL CONTEXT:\s*(\[.*\])", prompt, re.DOTALL)
         self.assertIsNotNone(m_ctx)
-        groups = json.loads(m_ctx.group(1))
-        docs = groups[0]["results"]
+        sections = json.loads(m_ctx.group(1))
 
-        self.assertEqual(len(docs), 3)
-        # First candidate document has section_definition
-        self.assertIn("section_definition", docs[0])
-        # Sibling candidates 2 and 3 do NOT repeat section_definition
-        self.assertNotIn("section_definition", docs[1])
-        self.assertNotIn("section_definition", docs[2])
+        self.assertEqual(len(sections), 1)
+        sec_obj = sections[0]
+        self.assertEqual(str(sec_obj["section"]), "303")
+        self.assertIn("section_definition", sec_obj)
 
-        # All 3 candidates retain their own id, section, clause, title, and target_clause_text
-        for d in docs:
-            self.assertEqual(str(d["section"]), "303")
-            self.assertIn("target_clause_text", d)
+        clauses = sec_obj["clauses"]
+        self.assertEqual(len(clauses), 3)
+
+        # Sibling clauses do NOT repeat section_definition
+        for cl in clauses:
+            self.assertNotIn("section_definition", cl)
+            self.assertIn("target_clause_text", cl)
 
     def test_27_distinct_bns_sections_retain_their_own_section_definitions(self):
         """Test 27: Distinct BNS sections each retain their own section_definition in prompt context."""
@@ -909,15 +920,14 @@ class TestLegalAnalyzer(unittest.TestCase):
 
         m_ctx = re.search(r"RETRIEVED BNS LEGAL CONTEXT:\s*(\[.*\])", prompt, re.DOTALL)
         self.assertIsNotNone(m_ctx)
-        groups = json.loads(m_ctx.group(1))
-        docs = groups[0]["results"]
+        sections = json.loads(m_ctx.group(1))
 
-        self.assertEqual(len(docs), 2)
+        self.assertEqual(len(sections), 2)
         # Both distinct sections (303 and 304) retain their own section_definition
-        self.assertIn("section_definition", docs[0])
-        self.assertIn("section_definition", docs[1])
-        self.assertEqual(docs[0]["section_definition"], "303.(1) Theft definition text...")
-        self.assertEqual(docs[1]["section_definition"], "304.(1) Snatching definition text...")
+        self.assertIn("section_definition", sections[0])
+        self.assertIn("section_definition", sections[1])
+        self.assertEqual(sections[0]["section_definition"], "303.(1) Theft definition text...")
+        self.assertEqual(sections[1]["section_definition"], "304.(1) Snatching definition text...")
 
 
 
@@ -1269,7 +1279,6 @@ class TestMaxTokensBudgetsAndProviderKwargs(unittest.TestCase):
             model=client.model_name,
             messages=[{"role": "user", "content": "Test prompt"}],
             temperature=0.0,
-            response_format={"type": "json_object"},
             max_completion_tokens=1300
         )
 
@@ -1505,6 +1514,56 @@ class TestWorkloadAwareRoutingAndHealth(unittest.TestCase):
 
         self.assertIn("All LLM providers", str(cm.exception))
 
+    def test_layer1_full_evidence_and_layer2_compact_snippet(self):
+        """Verify Layer 1 retains full raw text while Layer 2 construct_analysis_prompt bounds clause snippets."""
+        from ai.rag.analysis.context_builder import build_legal_context
+        long_raw_text = "Section 303 BNS Theft Definition: " + "X" * 1000
+
+        retrieval_data = [{
+            "id": "bns_303_1",
+            "section": "303",
+            "clause": "(1)",
+            "title": "Theft",
+            "text": long_raw_text,
+            "target_clause_text": "",
+            "section_definition": ""
+        }]
+
+        ner_data = {"raw_text": "Incident text"}
+        ctx = build_legal_context(ner_data, retrieval_data)
+
+        # 1. Layer 1 check: Full raw text preserved intact
+        layer1_item = ctx["legal_context"][0]["results"][0]
+        self.assertEqual(layer1_item["text"], long_raw_text)
+
+        # 2. Layer 2 check: LLM prompt formats bounded snippet <= 350 chars
+        prompt = construct_analysis_prompt(ctx)
+        self.assertNotIn("X" * 500, prompt)
+        self.assertIn("Section 303 BNS Theft Definition:", prompt)
+
+    def test_parse_json_from_llm_valid_structured(self):
+        """Verify _parse_json_from_llm successfully parses valid JSON."""
+        raw = '{"status": "success", "analysis": [{"document_id": "bns_303", "applicability": "supported"}]}'
+        res = _parse_json_from_llm(raw)
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["analysis"][0]["document_id"], "bns_303")
+
+    def test_parse_json_from_llm_markdown_wrapped(self):
+        """Verify _parse_json_from_llm parses markdown-wrapped ```json ... ``` blocks."""
+        raw = '```json\n{"status": "success", "analysis": [{"document_id": "bns_303"}]}\n```'
+        res = _parse_json_from_llm(raw)
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["analysis"][0]["document_id"], "bns_303")
+
+    def test_parse_json_from_llm_trailing_commas_and_surrounding_text(self):
+        """Verify _parse_json_from_llm handles trailing commas and harmless surrounding text."""
+        raw = 'Here is the analysis:\n{"status": "success", "analysis": [{"document_id": "bns_303", "applicability": "supported",}],}\nHope this helps!'
+        res = _parse_json_from_llm(raw)
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["analysis"][0]["document_id"], "bns_303")
+
 
 if __name__ == "__main__":
     unittest.main()
+
+

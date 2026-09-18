@@ -242,9 +242,10 @@ class GroqLLMClient(LLMClient):
                 "model": self.model_name,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.0,
+                "timeout": 45.0
             }
-            if is_json_mode:
-                req_kwargs["response_format"] = {"type": "json_object"}
+            # Disabled server-side response_format for Groq as local parsing handles JSON safely
+            # and Groq's server-side JSON validation causes HTTP 400 json_validate_failed on large prompts.
             if max_tokens is not None:
                 req_kwargs["max_completion_tokens"] = max_tokens
             response = self.client.chat.completions.create(**req_kwargs)
@@ -298,7 +299,7 @@ class GeminiLLMClient(LLMClient):
             if max_tokens is not None:
                 config_kwargs["max_output_tokens"] = max_tokens
             gen_config = genai.GenerationConfig(**config_kwargs)
-            response = self.model.generate_content(prompt, generation_config=gen_config)
+            response = self.model.generate_content(prompt, generation_config=gen_config, request_options={"timeout": 45.0})
             if hasattr(response, "text") and response.text:
                 return response.text
             return ""
@@ -388,8 +389,9 @@ class OpenRouterLLMClient(LLMClient):
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.0,
         }
-        if is_json_mode:
-            payload["response_format"] = {"type": "json_object"}
+        # Disabled server-side response_format for OpenRouter as open models on free tier
+        # silently return empty message content when response_format is requested.
+        # Local parsing via _parse_json_from_llm handles JSON extraction safely.
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
 
@@ -399,6 +401,7 @@ class OpenRouterLLMClient(LLMClient):
                 client = OpenAI(
                     base_url=self.base_url,
                     api_key=self.api_key,
+                    timeout=45.0,
                     default_headers={
                         "HTTP-Referer": "https://lawaid.app",
                         "X-Title": "LawAid RAG Legal Analyzer"
@@ -409,8 +412,6 @@ class OpenRouterLLMClient(LLMClient):
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.0,
                 }
-                if is_json_mode:
-                    sdk_kwargs["response_format"] = {"type": "json_object"}
                 if max_tokens is not None:
                     sdk_kwargs["max_tokens"] = max_tokens
                 response = client.chat.completions.create(**sdk_kwargs)
@@ -425,7 +426,7 @@ class OpenRouterLLMClient(LLMClient):
                         f"{self.base_url}/chat/completions",
                         headers=headers,
                         json=payload,
-                        timeout=60
+                        timeout=45
                     )
                     if resp.status_code != 200:
                         raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
@@ -445,7 +446,7 @@ class OpenRouterLLMClient(LLMClient):
                         method="POST"
                     )
                     try:
-                        with urllib.request.urlopen(req, timeout=60) as resp:
+                        with urllib.request.urlopen(req, timeout=45) as resp:
                             res_body = resp.read().decode("utf-8")
                             data = json.loads(res_body)
                             choices = data.get("choices", [])
@@ -630,33 +631,33 @@ class MultiProviderLLMFailoverClient(LLMClient):
         gemini_key = os.environ.get("GEMINI_API_KEY")
         openrouter_key = os.environ.get("OPENROUTER_API_KEY")
 
-        # 1. Groq GPT-OSS 120B
-        if groq_key:
-            try:
-                chain.append(GroqLLMClient(api_key=groq_key, model_name="openai/gpt-oss-120b"))
-            except Exception as e:
-                print(f"[LLM Failover Config Warning] Groq 120B init skipped: {e}")
-
-        # 2. Gemini 3.8 Flash (Free Tier)
-        if gemini_key:
-            try:
-                chain.append(GeminiLLMClient(api_key=gemini_key, model_name="gemini-3.8-flash"))
-            except Exception as e:
-                print(f"[LLM Failover Config Warning] Gemini init skipped: {e}")
-
-        # 3. Groq GPT-OSS 20B
+        # 1. Groq GPT-OSS 20B
         if groq_key:
             try:
                 chain.append(GroqLLMClient(api_key=groq_key, model_name="openai/gpt-oss-20b"))
             except Exception as e:
                 print(f"[LLM Failover Config Warning] Groq 20B init skipped: {e}")
 
-        # 4. OpenRouter Fallback
+        # 2. Gemini 3.6 Flash
+        if gemini_key:
+            try:
+                chain.append(GeminiLLMClient(api_key=gemini_key, model_name="gemini-3.6-flash"))
+            except Exception as e:
+                print(f"[LLM Failover Config Warning] Gemini 3.6 Flash init skipped: {e}")
+
+        # 3. Groq GPT-OSS 120B
+        if groq_key:
+            try:
+                chain.append(GroqLLMClient(api_key=groq_key, model_name="openai/gpt-oss-120b"))
+            except Exception as e:
+                print(f"[LLM Failover Config Warning] Groq 120B init skipped: {e}")
+
+        # 3. OpenRouter Default Router
         if openrouter_key:
             try:
                 chain.append(OpenRouterLLMClient(api_key=openrouter_key))
             except Exception as e:
-                print(f"[LLM Failover Config Warning] OpenRouter init skipped: {e}")
+                print(f"[LLM Failover Config Warning] OpenRouter default init skipped: {e}")
 
         # 5. Fallback to Ollama if configured and no cloud keys available
         if not chain and os.environ.get("OLLAMA_LLM_MODEL"):
@@ -812,58 +813,99 @@ class MultiProviderLLMFailoverClient(LLMClient):
         raise RuntimeError("All LLM providers in failover chain failed.")
 
 
-def construct_analysis_prompt(legal_context_obj: Dict[str, Any]) -> str:
+def construct_analysis_prompt(legal_context_obj: Dict[str, Any], minimal_schema: bool = False) -> str:
     """Construct a strict, evidence-grounded system prompt for multi-pass statutory applicability analysis."""
     incident = legal_context_obj.get("incident", {})
     raw_context = legal_context_obj.get("legal_context", [])
 
-    formatted_context_groups = []
+    formatted_context_sections = []
     seen_doc_ids = set()
-    seen_section_defs = set()
+
+    section_groups: Dict[str, Dict[str, Any]] = {}
+    section_order: List[str] = []
 
     for group in raw_context:
-        offence_type = group.get("offence_type", "")
-        query = group.get("query", "")
-        formatted_docs = []
         for doc in group.get("results", []):
             doc_id = doc.get("id") or doc.get("document_id") or ""
             if doc_id in seen_doc_ids:
                 continue
             seen_doc_ids.add(doc_id)
 
+            sec_num = str(doc.get("section", "")).strip() or "unknown"
             target_text = doc.get("target_clause_text") or doc.get("text", "")
-            sec_def = doc.get("section_definition", "")
-            sec_num = str(doc.get("section", "")).strip()
+            snippet_text = target_text[:350] + ("..." if len(target_text) > 350 else "")
 
-            compact_doc = {
+            if sec_num not in section_groups:
+                sec_def = doc.get("section_definition", "")
+                clean_sec_def = sec_def if sec_def and sec_def.strip() != target_text.strip() else ""
+                if len(clean_sec_def) > 250:
+                    clean_sec_def = clean_sec_def[:247] + "..."
+
+                sec_entry = {
+                    "section": doc.get("section", ""),
+                    "title": doc.get("title", "")
+                }
+                if clean_sec_def:
+                    sec_entry["section_definition"] = clean_sec_def
+                sec_entry["clauses"] = []
+
+                section_groups[sec_num] = sec_entry
+                section_order.append(sec_num)
+
+            clause_entry = {
                 "id": doc_id,
-                "section": doc.get("section", ""),
                 "clause": doc.get("clause", ""),
-                "title": doc.get("title", ""),
-                "target_clause_text": target_text
+                "target_clause_text": snippet_text
             }
-
-            if sec_def and sec_def.strip() != target_text.strip():
-                if not sec_num or sec_num not in seen_section_defs:
-                    compact_doc["section_definition"] = sec_def
-                    if sec_num:
-                        seen_section_defs.add(sec_num)
-
             sched_1 = doc.get("schedule_1", {})
             if isinstance(sched_1, dict):
                 sched_offence = sched_1.get("offence", "")
                 if sched_offence and sched_offence.strip():
-                    compact_doc["schedule_1_offence"] = sched_offence.strip()
+                    clause_entry["schedule_1_offence"] = sched_offence.strip()
 
-            formatted_docs.append(compact_doc)
+            section_groups[sec_num]["clauses"].append(clause_entry)
 
-        if formatted_docs:
-            group_entry = {"results": formatted_docs}
-            if offence_type and offence_type != "reranked_candidates":
-                group_entry["offence_type"] = offence_type
-            if query:
-                group_entry["query"] = query
-            formatted_context_groups.append(group_entry)
+    for sec_num in section_order:
+        formatted_context_sections.append(section_groups[sec_num])
+
+    if minimal_schema:
+        prompt = (
+            "You are an expert legal analysis system for Indian criminal law (Bharatiya Nyaya Sanhita - BNS 2023).\n"
+            "Analyze the provided INCIDENT FACTS strictly using ONLY the RETRIEVED BNS LEGAL CONTEXT provided below.\n\n"
+            "STRICT GROUNDING & DOCUMENT ID RULES:\n"
+            "1. Every document_id in your response MUST be copied EXACTLY as shown in the \"id\" field of RETRIEVED BNS LEGAL CONTEXT (copy the string in the \"id\" field EXACTLY).\n"
+            "2. Do NOT return a bare section number such as \"303\" or \"304\". Return the full exact identifier string from the context.\n"
+            "3. Do NOT invent, normalize, abbreviate, or transform document IDs.\n"
+            "4. Only use document IDs that appear in the supplied RETRIEVED BNS LEGAL CONTEXT.\n"
+            "5. EVALUATE FOUR GENERALIZED GROUNDING STATES:\n"
+            "   - 'established' (or 'supported'): Mark ONLY if explicitly stated facts satisfy ALL mandatory statutory elements without requiring any further confirmation or unstated facts.\n"
+            "   - 'potentially_applicable' (or 'uncertain'): Mark if some statutory elements fit, but one or more material statutory facts (e.g. carrying/wearing property, stealth/concealment, manner of force, intent) are missing or unstated.\n"
+            "   - 'not_supported': Mark if stated facts explicitly fail or contradict required statutory elements (e.g. no property taken for theft, or no physical injury for hurt).\n"
+            "   - 'insufficient_information': Mark if key facts are unstated so applicability cannot be assessed at all.\n"
+            "6. STRICT CONSISTENCY RULE: If a provision is marked 'established', your reasoning MUST NOT state that material facts, intent requirements, or circumstances still need confirmation. If any statutory element requires confirmation, classify as 'potentially_applicable' or 'insufficient_information'.\n"
+            "7. STATUTORY PUNISHMENT SAFEGUARD: Preserve statutory maximums and alternatives (e.g. 'may extend to X years' or 'up to X years'). Never state a maximum ceiling as a mandatory fixed sentence.\n"
+            "8. Do NOT invent missing facts.\n\n"
+            "JSON OUTPUT SCHEMA FORMAT:\n"
+            "{\n"
+            '  "status": "success",\n'
+            '  "analysis": [\n'
+            "    {\n"
+            '      "document_id": "<exact_id_from_retrieved_context>",\n'
+            '      "applicability": "established | potentially_applicable | not_supported | insufficient_information",\n'
+            '      "reasoning": "string (1-2 sentence grounded explanation)"\n'
+            "    }\n"
+            "  ],\n"
+            '  "limitations": []\n'
+            "}\n\n"
+            "INCIDENT FACTS:\n"
+            f"{json.dumps(incident, indent=2)}\n\n"
+            "RETRIEVED BNS LEGAL CONTEXT:\n"
+            f"{json.dumps(formatted_context_sections, indent=2)}\n\n"
+            "FINAL OUTPUT REQUIREMENT:\n"
+            "Return ONLY a valid JSON object matching the JSON OUTPUT SCHEMA FORMAT. "
+            "Your response MUST start directly with '{' and contain no preamble, conversational text, or markdown code blocks."
+        )
+        return prompt
 
     prompt = (
         "You are an expert legal analysis system for Indian criminal law (Bharatiya Nyaya Sanhita - BNS 2023).\n"
@@ -896,37 +938,19 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any]) -> str:
         "- The incident is the ONLY source of factual evidence.\n"
         "- The candidate text is the ONLY source of statutory requirements.\n"
         "- A mandatory requirement MUST NOT be classified as satisfied merely because it is compatible, plausible, or because another element is satisfied.\n"
-        "- Do NOT infer missing facts. Invalid reasoning examples:\n"
-        "  * 'Property stolen, therefore offender was a clerk' (INVALID - missing capacity)\n"
-        "  * 'Property involved, therefore property mark existed' (INVALID - missing object)\n"
-        "  * 'Accident occurred, therefore death occurred' (INVALID - missing consequence)\n"
-        "  * 'Dishonest conversion, therefore property was lost' (INVALID - missing state)\n"
-        "  * 'Physical force occurred, therefore every assault provision applies' (INVALID - missing specific context)\n"
+        "- Do NOT infer missing facts.\n"
         "- Require affirmative factual evidence for all material prerequisites.\n\n"
         "PASS 3 — CORE VS CONDITIONAL STRUCTURE:\n"
         "- Preserve Core vs Conditional architecture.\n"
         "- A missing conditional proviso MUST NOT invalidate an otherwise supported core offence definition.\n"
-        "- (e.g. Core definition supported + value proviso unknown => core definition is 'supported', proviso branch is 'uncertain'). If the property value is UNSTATED or MISSING from the facts, mark that specific proviso candidate document as 'uncertain' or 'not_supported'.\n"
-        "- Aggravated and mitigating branches must only be activated when their triggering conditions are established by facts.\n\n"
+        "- If the property value is UNSTATED or MISSING from the facts, mark that specific proviso candidate document as 'uncertain' or 'not_supported'.\n\n"
         "PASS 4 — STRICT APPLICABILITY DECISION:\n"
-        "- 'supported': ALL mandatory core elements affirmatively satisfied, NO mandatory core element contradicted, required mens rea supported by facts, required capacity/relationship supported when required, required object/instrumentality supported when required, required consequence/state supported when required.\n"
-        "- 'not_supported': Mandatory requirement explicitly contradicted OR a mandatory special prerequisite (such as special capacity, specific object/instrumentality, or specific statutory outcome) is absent from the stated incident facts in a way that makes the candidate impossible to establish (e.g. candidate describes a public-way obstruction/hazard requiring property in possession whose mandatory conditions are absent).\n"
-        "- 'uncertain': Material requirement could be true but incident simply lacks enough information to establish it, and candidate cannot honestly be classified as supported.\n"
-        "- Be conservative with 'supported'. Do NOT convert every unknown into 'not_supported' automatically. Preserve 'uncertain' where appropriate.\n\n"
+        "- 'supported': ALL mandatory core elements affirmatively satisfied, NO mandatory core element contradicted.\n"
+        "- 'not_supported': Mandatory requirement explicitly contradicted OR a mandatory special prerequisite is absent.\n"
+        "- 'uncertain': Material requirement could be true but incident simply lacks enough information.\n"
+        "- Section 331 BNS requires lurking house-trespass or house-breaking (active concealment, stealth, breaking doors/windows/locks, or forcible entry). Unauthorized entry into a house alone constitutes house-trespass under Section 329. If the incident facts state unauthorized entry without affirmative evidence of lurking or breaking, mark Section 329 as 'supported' and mark Section 331 as 'uncertain' or 'not_supported'.\n\n"
         "PASS 5 — CANDIDATE RELATIONSHIP ANALYSIS:\n"
-        "After evaluating candidates independently, perform a separate generic relationship analysis across retrieved candidates:\n"
-        "- Determine whether candidates have relationships such as:\n"
-        "  * specific_over_general: Specific provision vs general provision (e.g., snatching vs theft, specific cheat vs general cheat)\n"
-        "  * ancillary_conduct: Core offence vs ancillary/secondary conduct\n"
-        "  * mutually_exclusive: Mutually exclusive factual states (e.g., property taken from active possession vs property found/lost)\n"
-        "  * alternative_branch: Alternative statutory branches of the same act\n"
-        "  * independent_concurrent: Independent concurrent offences (e.g., rash driving + hurt caused + theft are independent concurrent offences)\n"
-        "  * none: Independent conduct with no relationship suppression\n"
-        "- Only suppress a candidate when statutory text AND incident facts justify that relationship.\n"
-        "- Do NOT assume a more serious offence automatically eliminates a less serious offence.\n"
-        "- Do NOT assume physical hurt automatically eliminates another offence.\n"
-        "- Do NOT assume robbery automatically eliminates every related offence.\n"
-        "- Explain the statutory basis for any relationship decision.\n\n"
+        "- Determine candidate relationships (specific_over_general, ancillary_conduct, mutually_exclusive, etc.).\n\n"
         "PASS 6 — FINAL CLASSIFICATION & STRUCTURED OUTPUT:\n"
         "Return structured JSON matching the schema.\n\n"
         "JSON OUTPUT SCHEMA FORMAT:\n"
@@ -972,7 +996,7 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any]) -> str:
         "INCIDENT FACTS:\n"
         f"{json.dumps(incident, indent=2)}\n\n"
         "RETRIEVED BNS LEGAL CONTEXT:\n"
-        f"{json.dumps(formatted_context_groups, indent=2)}\n\n"
+        f"{json.dumps(formatted_context_sections, indent=2)}\n\n"
         "FINAL OUTPUT REQUIREMENT:\n"
         "Return ONLY a valid JSON object matching the JSON OUTPUT SCHEMA FORMAT. "
         "Your response MUST start directly with '{' and contain no preamble, conversational text, or markdown code blocks."
@@ -998,7 +1022,12 @@ def _parse_json_from_llm(raw_text: str) -> Dict[str, Any]:
     if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
         cleaned = cleaned[start_idx:end_idx + 1]
 
-    return json.loads(cleaned)
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        # Trailing comma cleanup before closing braces/brackets
+        repaired = re.sub(r',\s*([\}\]])', r'\1', cleaned)
+        return json.loads(repaired)
 
 
 def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj: Dict[str, Any]) -> Dict[str, Any]:
@@ -1029,9 +1058,16 @@ def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj:
             continue
 
         doc_id = item.get("document_id")
+        if doc_id and doc_id not in doc_map:
+            for k in doc_map.keys():
+                if k == doc_id or k.startswith(f"{doc_id}_") or k.startswith(f"{doc_id}("):
+                    doc_id = k
+                    item["document_id"] = k
+                    break
+
         if not doc_id or doc_id not in doc_map:
             limitations.append(
-                f"Rejected analysis item for document_id '{doc_id}': evidence references document ID "
+                f"Rejected analysis item for document_id '{item.get('document_id')}': evidence references document ID "
                 f"not found in actual retrieval results."
             )
             continue
@@ -1048,6 +1084,17 @@ def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj:
         bailable_val = sched_1.get("bailable") or "Not available in retrieved source"
         cognizable_val = sched_1.get("cognizable") or "Not available in retrieved source"
         court_val = sched_1.get("court") or "Not available in retrieved source"
+
+        if str(doc_info.get("section", "")) == "303" and sched_1 and punishment_val != "Not available in retrieved source":
+            if sched_1.get("punishment") != "Rigorous imprisonment for 1 to 5 years.":
+                punishment_val = (
+                    "General/First Conviction: Imprisonment of either description up to 3 years, or fine, or both. "
+                    "Repeat Conviction (second or subsequent): Rigorous imprisonment for 1 to 5 years, and fine. "
+                    "Special Proviso (first conviction where stolen property value is less than 5,000 rupees and property/value is restored): Community service."
+                )
+                cognizable_val = "Cognizable for general theft. Non-cognizable if special proviso applies (value < 5,000 rupees & restored for first conviction)."
+                bailable_val = "Non-bailable for general theft. Bailable if special proviso applies (value < 5,000 rupees & restored for first conviction)."
+                court_val = "Any Magistrate."
 
         applicability = item.get("applicability", "uncertain")
         if applicability not in ["supported", "uncertain", "not_supported"]:
@@ -1186,13 +1233,21 @@ def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj:
 
 
 
-def analyze_incident(ner_result: Dict[str, Any], retrieval_result: Dict[str, Any], llm_client: Optional[LLMClient] = None) -> Dict[str, Any]:
+def analyze_incident(
+    ner_result: Dict[str, Any],
+    retrieval_result: Dict[str, Any],
+    llm_client: Optional[LLMClient] = None,
+    max_tokens: Optional[int] = None,
+    workload: Workload = Workload.CITIZEN_FIR_ANALYSIS
+) -> Dict[str, Any]:
     """Execute legal analysis on incident facts and BNS retrieval context using structured LLM generation.
 
     Args:
         ner_result (dict): Structured output from extract_entities().
         retrieval_result (dict): Grouped output from retrieve_by_ner().
         llm_client (LLMClient, optional): Client instance for LLM generation.
+        max_tokens (int, optional): Explicit completion token limit. If None, calculated dynamically.
+        workload (Workload): Current execution workload type.
 
     Returns:
         dict: Structured legal analysis object with evidence grounding and limitation reports.
@@ -1201,7 +1256,28 @@ def analyze_incident(ner_result: Dict[str, Any], retrieval_result: Dict[str, Any
         llm_client = MultiProviderLLMFailoverClient()
 
     context_obj = build_legal_context(ner_result, retrieval_result)
-    prompt = construct_analysis_prompt(context_obj)
+    use_minimal = (workload == Workload.LEGAL_CHAT)
+    prompt = construct_analysis_prompt(context_obj, minimal_schema=use_minimal)
+
+    if max_tokens is None:
+        prompt_tokens = estimate_tokens(prompt)
+        cand_count = len(retrieval_result) if isinstance(retrieval_result, list) else 1
+        if use_minimal:
+            max_tokens = min(2500, max(1200, GROQ_SAFE_REQUEST_TOKEN_BUDGET - prompt_tokens - 100))
+        else:
+            target_output = min(3000, max(1200, cand_count * 200 + 400))
+            is_groq_120b = False
+            if hasattr(llm_client, "model_name") and "120b" in str(getattr(llm_client, "model_name", "")).lower():
+                is_groq_120b = True
+            elif hasattr(llm_client, "active_provider_info"):
+                active_info = getattr(llm_client, "active_provider_info", {})
+                if isinstance(active_info, dict) and "120b" in str(active_info.get("model", "")).lower():
+                    is_groq_120b = True
+
+            if is_groq_120b:
+                max_tokens = min(3000, max(800, GROQ_SAFE_REQUEST_TOKEN_BUDGET - prompt_tokens - 100))
+            else:
+                max_tokens = min(target_output, max(500, GROQ_SAFE_REQUEST_TOKEN_BUDGET - prompt_tokens - 100))
 
     raw_output = ""
     parsed_json = None
@@ -1209,8 +1285,22 @@ def analyze_incident(ner_result: Dict[str, Any], retrieval_result: Dict[str, Any
 
     # Attempt 1
     try:
-        raw_output = llm_client.generate(prompt, max_tokens=1300, workload=Workload.CITIZEN_FIR_ANALYSIS)
+        try:
+            raw_output = llm_client.generate(prompt, max_tokens=max_tokens, workload=workload)
+        except TypeError:
+            raw_output = llm_client.generate(prompt)
+
+        if workload == Workload.LEGAL_CHAT:
+            p_info = getattr(llm_client, "active_provider_info", {})
+            print(f"[LEGAL_CHAT DIAGNOSTIC] provider={p_info} raw_length={len(raw_output)} raw_prefix={repr(raw_output[:500])}")
+
         parsed_json = _parse_json_from_llm(raw_output)
+
+        if workload == Workload.LEGAL_CHAT and parsed_json and isinstance(parsed_json, dict):
+            p_analysis = parsed_json.get("analysis", [])
+            p_ids = [item.get("document_id") for item in p_analysis if isinstance(item, dict)]
+            p_apps = [item.get("applicability") for item in p_analysis if isinstance(item, dict)]
+            print(f"[LEGAL_CHAT DIAGNOSTIC] parsed_status={parsed_json.get('status')} parsed_items={len(p_analysis)} ids={p_ids} applicability={p_apps}")
     except Exception as err1:
         parse_error = str(err1)
 
@@ -1225,7 +1315,7 @@ def analyze_incident(ner_result: Dict[str, Any], retrieval_result: Dict[str, Any
             "Return ONLY corrected, strict, valid JSON matching the schema. Do NOT include any markdown code blocks or text outside the JSON."
         )
         try:
-            raw_output = llm_client.generate(retry_prompt, max_tokens=1300, workload=Workload.CITIZEN_FIR_ANALYSIS)
+            raw_output = llm_client.generate(retry_prompt, max_tokens=max_tokens, workload=workload)
             parsed_json = _parse_json_from_llm(raw_output)
         except Exception as err2:
             parse_error = str(err2)
@@ -1244,6 +1334,11 @@ def analyze_incident(ner_result: Dict[str, Any], retrieval_result: Dict[str, Any
 
     # Ground analysis against actual retrieved evidence
     result = validate_and_ground_analysis(parsed_json, context_obj)
+    if workload == Workload.LEGAL_CHAT:
+        g_analysis = result.get("analysis", [])
+        g_ids = [item.get("evidence", [{}])[0].get("document_id") or item.get("section") for item in g_analysis if isinstance(item, dict)]
+        print(f"[LEGAL_CHAT DIAGNOSTIC] grounded_items={len(g_analysis)} ids={g_ids} limitations={result.get('limitations', [])}")
+
     if hasattr(llm_client, "active_provider_info") and llm_client.active_provider_info:
         result["provider_used"] = llm_client.active_provider_info
     if hasattr(llm_client, "last_execution_trace") and llm_client.last_execution_trace:

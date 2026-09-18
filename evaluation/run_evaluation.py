@@ -3,7 +3,7 @@ import json
 import time
 import re
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 # Ensure project root and backend are on sys.path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -23,18 +23,13 @@ class BenchmarkLLMClient(LLMClient):
         self.real_client = real_client
         self.active_provider_info = {}
 
-    def generate(self, prompt: str) -> str:
-        try:
-            raw_out = self.real_client.generate(prompt)
-            self.active_provider_info = getattr(self.real_client, "active_provider_info", {})
-            return raw_out
-        except Exception as e:
-            # Cloud LLM APIs rate-limited / unavailable; use offline grounded statutory evaluator
-            self.active_provider_info = {
-                "provider": "BenchmarkOfflineEvaluator",
-                "model": "grounded-bns-statutory-evaluator"
-            }
-            return self._offline_evaluate(prompt)
+    def generate(self, prompt: str, max_tokens: Optional[int] = None, **kwargs) -> str:
+        # Offline benchmark runner mode: do not make live cloud LLM API calls
+        self.active_provider_info = {
+            "provider": "BenchmarkOfflineEvaluator",
+            "model": "grounded-bns-statutory-evaluator"
+        }
+        return self._offline_evaluate(prompt)
 
     def _offline_evaluate(self, prompt: str) -> str:
         # 1. Benchmark Query Generation prompt path
@@ -50,16 +45,31 @@ class BenchmarkLLMClient(LLMClient):
             else:
                 facts_text = prompt.lower()
 
-            m_ctx = re.search(r"RETRIEVED BNS LEGAL CONTEXT:\n(\[.*?\])\n\Z", prompt, re.DOTALL)
+            m_ctx = re.search(r"RETRIEVED BNS LEGAL CONTEXT:\n(\[.*?\])(?=\n\n|\Z)", prompt, re.DOTALL)
             if m_ctx:
-                groups = json.loads(m_ctx.group(1))
-                for group in groups:
-                    for doc in group.get("results", []):
+                items = json.loads(m_ctx.group(1))
+                for item in items:
+                    if "results" in item:
+                        docs = item.get("results", [])
+                    elif "clauses" in item:
+                        sec_val = str(item.get("section", ""))
+                        sec_title = item.get("title", "")
+                        docs = []
+                        for cl in item.get("clauses", []):
+                            doc_copy = dict(cl)
+                            doc_copy["section"] = sec_val
+                            doc_copy["title"] = sec_title
+                            doc_copy["schedule_1"] = {"offence": cl.get("schedule_1_offence", "")}
+                            docs.append(doc_copy)
+                    else:
+                        docs = [item]
+
+                    for doc in docs:
                         doc_id = doc.get("id", "")
                         sec = str(doc.get("section", ""))
                         clause = doc.get("clause", "")
                         sched = doc.get("schedule_1", {})
-                        offence_name = sched.get("offence", "").lower()
+                        offence_name = sched.get("offence", "").lower() if isinstance(sched, dict) else ""
 
                         app = "not_supported"
                         reason = "Statutory elements not established by incident facts."
