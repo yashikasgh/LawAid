@@ -341,8 +341,11 @@ def generate_fir(body: GenerateFIRRequest, current_user: User = Depends(require_
     if len(incident_text) < 10:
         raise HTTPException(status_code=400, detail="Incident description must contain at least 10 characters.")
 
-    # 1. Run grounded RAG pipeline (NER, retrieval, reranking, legal analysis)
-    pipeline_res = run_pipeline(raw_incident=incident_text)
+    # 1. Run grounded RAG pipeline fast-path (NER, retrieval, reranking, without heavy legal-analysis LLM)
+    try:
+        pipeline_res = run_pipeline(raw_incident=incident_text, skip_llm_analysis=True)
+    except TypeError:
+        pipeline_res = run_pipeline(raw_incident=incident_text)
 
     sanitized_incident = pipeline_res.get("sanitized_incident", incident_text)
     grounded_analysis = pipeline_res.get("analysis", [])

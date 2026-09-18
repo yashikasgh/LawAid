@@ -385,17 +385,28 @@ async def understand_fir(file: UploadFile = File(...)):
         return deduped
 
     display_charges = _dedupe_charges(charges_supported)
-    if not display_charges and charges_uncertain:
-        display_charges = _dedupe_charges(charges_uncertain)
+    is_fallback = (ai_res.get("source") == "retrieval_fallback" or ai_res.get("pipeline_source") == "retrieval_fallback")
 
-    active_titles = [c["title"] for c in display_charges if c.get("title")]
-
-    plain_summary = (
-        f"Official police complaint document recorded. The allegations involve "
-        f"{', '.join(active_titles) or 'cognizable offences'}.\n\n"
-        f"Key facts stated in FIR:\n"
-        + (extracted_text[:400] + ("..." if len(extracted_text) > 400 else ""))
-    )
+    if is_fallback:
+        display_charges = []
+        reference_provisions = _dedupe_charges(full_analysis or charges_uncertain)
+        plain_summary = (
+            "Official police complaint document recorded. Automated legal reasoning is currently unavailable. "
+            "Relevant statutory provisions retrieved from the BNS corpus are provided below for reference.\n\n"
+            "Key facts stated in FIR:\n"
+            + (extracted_text[:400] + ("..." if len(extracted_text) > 400 else ""))
+        )
+    else:
+        if not display_charges and charges_uncertain:
+            display_charges = _dedupe_charges(charges_uncertain)
+        reference_provisions = []
+        active_titles = [c["title"] for c in display_charges if c.get("title")]
+        plain_summary = (
+            f"Official police complaint document recorded. The allegations involve "
+            f"{', '.join(active_titles) or 'cognizable offences'}.\n\n"
+            f"Key facts stated in FIR:\n"
+            + (extracted_text[:400] + ("..." if len(extracted_text) > 400 else ""))
+        )
 
     rights = [
         "Right to a free copy of the First Information Report (FIR) immediately under Section 173 BNSS.",
@@ -427,7 +438,8 @@ async def understand_fir(file: UploadFile = File(...)):
         "entities": ai_res.get("privacy_metadata", {}).get("detections", []),
         "summary": plain_summary,
         "charges": display_charges,
-        "uncertain_provisions": charges_uncertain,
+        "reference_provisions": reference_provisions,
+        "uncertain_provisions": charges_uncertain if not is_fallback else [],
         "analysis": full_analysis,
         "rights": rights,
         "next_steps": next_steps,
