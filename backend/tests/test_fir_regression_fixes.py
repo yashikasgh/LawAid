@@ -223,6 +223,7 @@ def test_analysis_unavailable_pipeline_status():
     assert "temporarily unavailable" in res.get("limitations")[0]
 
 
+
 def test_a_query_coverage_for_road_accident():
     """TEST A: Verify generated retrieval queries include semantic concepts for rash/negligent conduct, endangerment of life/personal safety, and hurt/injury without asserting section numbers."""
     import json

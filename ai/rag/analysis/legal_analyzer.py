@@ -940,12 +940,7 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any], minimal_schema:
         "- The incident is the ONLY source of factual evidence.\n"
         "- The candidate text is the ONLY source of statutory requirements.\n"
         "- A mandatory requirement MUST NOT be classified as satisfied merely because it is compatible, plausible, or because another element is satisfied.\n"
-        "- Do NOT infer missing facts. Invalid reasoning examples:\n"
-        "  * 'Property stolen, therefore offender was a clerk' (INVALID - missing capacity)\n"
-        "  * 'Property involved, therefore property mark existed' (INVALID - missing object)\n"
-        "  * 'Accident occurred, therefore death occurred' (INVALID - missing consequence)\n"
-        "  * 'Dishonest conversion, therefore property was lost' (INVALID - missing state)\n"
-        "  * 'Physical force occurred, therefore every assault provision applies' (INVALID - missing specific context)\n"
+        "- Do NOT infer missing facts.\n"
         "- Require affirmative factual evidence for all material prerequisites.\n\n"
         "PASS 3 — CORE VS CONDITIONAL STRUCTURE:\n"
         "- Preserve Core vs Conditional architecture.\n"
@@ -1304,6 +1299,7 @@ def analyze_incident(
         if workload == Workload.LEGAL_CHAT:
             p_info = getattr(llm_client, "active_provider_info", {})
             print(f"[LEGAL_CHAT DIAGNOSTIC] provider={p_info} raw_length={len(raw_output)} raw_prefix={repr(raw_output[:500])}")
+
         parsed_json = _parse_json_from_llm(raw_output)
 
         if workload == Workload.LEGAL_CHAT and parsed_json and isinstance(parsed_json, dict):
@@ -1348,6 +1344,7 @@ def analyze_incident(
         g_analysis = result.get("analysis", [])
         g_ids = [item.get("evidence", [{}])[0].get("document_id") or item.get("section") for item in g_analysis if isinstance(item, dict)]
         print(f"[LEGAL_CHAT DIAGNOSTIC] grounded_items={len(g_analysis)} ids={g_ids} limitations={result.get('limitations', [])}")
+
     if hasattr(llm_client, "active_provider_info") and llm_client.active_provider_info:
         result["provider_used"] = llm_client.active_provider_info
     if hasattr(llm_client, "last_execution_trace") and llm_client.last_execution_trace:

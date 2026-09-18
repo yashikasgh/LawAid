@@ -247,6 +247,7 @@ def test_chat_empty_message_returns_400():
     assert "Message cannot be empty" in res.json()["detail"]
 
 
+
 def test_chat_theft():
     res = client.post("/chat/message", json={"message": "Someone stole my phone."})
     assert res.status_code == 200
