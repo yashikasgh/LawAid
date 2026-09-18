@@ -37,7 +37,8 @@ from legal_analyzer import (
     ProviderHealthStatus,
     GLOBAL_HEALTH_TRACKER,
     estimate_tokens,
-    GROQ_SAFE_REQUEST_TOKEN_BUDGET
+    GROQ_SAFE_REQUEST_TOKEN_BUDGET,
+    _parse_json_from_llm
 )
 from context_builder import build_legal_context
 from ai.rag.retrieval.query_generator import generate_queries
@@ -240,6 +241,16 @@ class TestLegalAnalyzer(unittest.TestCase):
         self.assertEqual(res["analysis"], [])
         self.assertEqual(res["limitations"], ["No applicable provisions found."])
 
+    def test_legal_chat_prompt_requires_exact_retrieved_document_ids(self):
+        """Verify minimal_schema prompt explicitly instructs LLM to copy exact document_id string."""
+        ctx = build_legal_context(self.sample_ner, self.sample_retrieval)
+        prompt = construct_analysis_prompt(ctx, minimal_schema=True)
+
+        self.assertIn("STRICT GROUNDING & DOCUMENT ID RULES:", prompt)
+        self.assertIn("Every document_id in your response MUST be copied EXACTLY as shown in the \"id\" field", prompt)
+        self.assertIn("Do NOT return a bare section number such as \"303\" or \"304\"", prompt)
+        self.assertIn('"document_id": "<exact_id_from_retrieved_context>"', prompt)
+
     def test_10_ollama_llm_client_configuration_error(self):
         """Test 10: OllamaLLMClient raises clear configuration error if no model is set."""
         client = OllamaLLMClient(model_name=None)
@@ -292,7 +303,8 @@ class TestLegalAnalyzer(unittest.TestCase):
         mock_instance.chat.completions.create.assert_called_once_with(
             model=client.model_name,
             messages=[{"role": "user", "content": "Test prompt"}],
-            temperature=0.0
+            temperature=0.0,
+            timeout=45.0
         )
 
     @unittest.mock.patch("groq.Groq")
@@ -1502,6 +1514,56 @@ class TestWorkloadAwareRoutingAndHealth(unittest.TestCase):
 
         self.assertIn("All LLM providers", str(cm.exception))
 
+    def test_layer1_full_evidence_and_layer2_compact_snippet(self):
+        """Verify Layer 1 retains full raw text while Layer 2 construct_analysis_prompt bounds clause snippets."""
+        from ai.rag.analysis.context_builder import build_legal_context
+        long_raw_text = "Section 303 BNS Theft Definition: " + "X" * 1000
+
+        retrieval_data = [{
+            "id": "bns_303_1",
+            "section": "303",
+            "clause": "(1)",
+            "title": "Theft",
+            "text": long_raw_text,
+            "target_clause_text": "",
+            "section_definition": ""
+        }]
+
+        ner_data = {"raw_text": "Incident text"}
+        ctx = build_legal_context(ner_data, retrieval_data)
+
+        # 1. Layer 1 check: Full raw text preserved intact
+        layer1_item = ctx["legal_context"][0]["results"][0]
+        self.assertEqual(layer1_item["text"], long_raw_text)
+
+        # 2. Layer 2 check: LLM prompt formats bounded snippet <= 350 chars
+        prompt = construct_analysis_prompt(ctx)
+        self.assertNotIn("X" * 500, prompt)
+        self.assertIn("Section 303 BNS Theft Definition:", prompt)
+
+    def test_parse_json_from_llm_valid_structured(self):
+        """Verify _parse_json_from_llm successfully parses valid JSON."""
+        raw = '{"status": "success", "analysis": [{"document_id": "bns_303", "applicability": "supported"}]}'
+        res = _parse_json_from_llm(raw)
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["analysis"][0]["document_id"], "bns_303")
+
+    def test_parse_json_from_llm_markdown_wrapped(self):
+        """Verify _parse_json_from_llm parses markdown-wrapped ```json ... ``` blocks."""
+        raw = '```json\n{"status": "success", "analysis": [{"document_id": "bns_303"}]}\n```'
+        res = _parse_json_from_llm(raw)
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["analysis"][0]["document_id"], "bns_303")
+
+    def test_parse_json_from_llm_trailing_commas_and_surrounding_text(self):
+        """Verify _parse_json_from_llm handles trailing commas and harmless surrounding text."""
+        raw = 'Here is the analysis:\n{"status": "success", "analysis": [{"document_id": "bns_303", "applicability": "supported",}],}\nHope this helps!'
+        res = _parse_json_from_llm(raw)
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["analysis"][0]["document_id"], "bns_303")
+
 
 if __name__ == "__main__":
     unittest.main()
+
+

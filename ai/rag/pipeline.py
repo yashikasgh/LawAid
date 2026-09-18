@@ -64,6 +64,16 @@ def _build_retrieval_fallback_analysis(candidates: List[Dict[str, Any]]) -> List
         cognizable_val = sched_1.get("cognizable") or "Not available in retrieved source"
         court_val = sched_1.get("court") or "Not available in retrieved source"
 
+        if sec == "303":
+            punishment_val = (
+                "General/First Conviction: Imprisonment of either description up to 3 years, or fine, or both. "
+                "Repeat Conviction (second or subsequent): Rigorous imprisonment for 1 to 5 years, and fine. "
+                "Special Proviso (first conviction where stolen property value is less than 5,000 rupees and property/value is restored): Community service."
+            )
+            cognizable_val = "Cognizable for general theft. Non-cognizable if special proviso applies (value < 5,000 rupees & restored for first conviction)."
+            bailable_val = "Non-bailable for general theft. Bailable if special proviso applies (value < 5,000 rupees & restored for first conviction)."
+            court_val = "Any Magistrate."
+
         sec_def = cand.get("section_definition") or cand.get("target_clause_text") or cand.get("text", "")
         clean_def = sec_def.strip() if sec_def else title
         if len(clean_def) > 300:
@@ -155,8 +165,15 @@ def pack_candidates_by_section(
             "total_tokens_estimated": int total estimated tokens packed
         }
     """
+    from ai.rag.analysis.legal_analyzer import construct_analysis_prompt, estimate_tokens
+    sample_static_prompt = construct_analysis_prompt({"incident": {}, "legal_context": []})
+    actual_static_tokens = estimate_tokens(sample_static_prompt) + 200
+
+    # Derive real prompt overhead dynamically while preserving explicit overrides for testing
+    effective_base_tokens = max(base_prompt_tokens, actual_static_tokens) if base_prompt_tokens == 700 else base_prompt_tokens
+
     safe_budget = max_token_budget - min_output_tokens
-    current_tokens = base_prompt_tokens
+    current_tokens = effective_base_tokens
 
     # Step 1: Group sibling clause documents by parent section while preserving first-seen RRF rank order
     section_groups: Dict[str, List[Dict[str, Any]]] = {}
@@ -180,14 +197,15 @@ def pack_candidates_by_section(
         # Calculate compact section token footprint (1 parent header + sum of sub-clause snippets)
         sec_title = sibling_docs[0].get("title", "")
         sec_def_text = sibling_docs[0].get("section_definition", "")
-        parent_header = f"{sec_title} {sec_def_text}".strip()
+        parent_header = f"{sec_title} {sec_def_text[:250]}".strip()
 
         clause_tokens_sum = 0
         for doc in sibling_docs:
             ctext = doc.get("target_clause_text") or doc.get("text", "")
-            clause_tokens_sum += (len(ctext) // 4) + 25
+            snippet = ctext[:350]
+            clause_tokens_sum += (len(snippet) // 4) + 20
 
-        sec_compact_tokens = (len(parent_header) // 4) + 30 + clause_tokens_sum
+        sec_compact_tokens = (len(parent_header) // 4) + 25 + clause_tokens_sum
 
         if current_tokens + sec_compact_tokens <= safe_budget:
             packed_candidates.extend(sibling_docs)
@@ -200,7 +218,8 @@ def pack_candidates_by_section(
             # Check if packing at least the primary (highest-ranked) clause of this section fits safely.
             primary_doc = sibling_docs[0]
             primary_text = primary_doc.get("target_clause_text") or primary_doc.get("text", "")
-            primary_tokens = (len(parent_header) // 4) + 30 + (len(primary_text) // 4) + 25
+            primary_snippet = primary_text[:350]
+            primary_tokens = (len(parent_header) // 4) + 25 + (len(primary_snippet) // 4) + 20
 
             if current_tokens + primary_tokens <= safe_budget:
                 packed_candidates.append(primary_doc)
@@ -226,7 +245,10 @@ def run_pipeline(
     llm_client: Optional[LLMClient] = None,
     top_k_retrieval: int = 20,
     top_k_rerank: int = 15,
-    analysis_candidate_limit: Optional[int] = None
+    analysis_candidate_limit: Optional[int] = None,
+    skip_llm_analysis: bool = False,
+    use_deterministic_queries: bool = False,
+    workload: Workload = Workload.CITIZEN_FIR_ANALYSIS
 ) -> Dict[str, Any]:
     """
     Executes the end-to-end LawAid RAG Legal Analysis Pipeline.
@@ -249,6 +271,7 @@ def run_pipeline(
         top_k_retrieval (int): Number of candidates to retrieve per query from ChromaDB (default 20).
         top_k_rerank (int): Number of top reranked candidates in candidate pool (default 15).
         analysis_candidate_limit (int): Maximum candidates passed to LLM analysis context (default 7).
+        skip_llm_analysis (bool): If True, skips LLM analysis generation and returns grounded retrieval fallback cards directly (useful for lightweight workflows e.g. FIR drafting).
 
     Returns:
         dict: Structured analysis result containing:
@@ -261,7 +284,7 @@ def run_pipeline(
             - reranked_candidates (full RRF reranked candidate pool)
     """
     # 1. Resolve LLM client ONCE at the pipeline boundary
-    if llm_client is None:
+    if llm_client is None and not skip_llm_analysis:
         llm_client = MultiProviderLLMFailoverClient()
 
     # 2. Privacy Gateway: Local sanitization boundary
@@ -272,7 +295,11 @@ def run_pipeline(
     ner_result = extract_entities(sanitized_text)
 
     # 4. Query Generation
-    query_output = generate_queries(ner_result, llm_client=llm_client)
+    if use_deterministic_queries:
+        from ai.rag.retrieval.query_generator import _generate_deterministic_queries
+        query_output = _generate_deterministic_queries(ner_result)
+    else:
+        query_output = generate_queries(ner_result, llm_client=llm_client if not skip_llm_analysis else None)
     raw_queries = query_output.get("queries", [])
     queries = [q["query"] for q in raw_queries if isinstance(q, dict) and "query" in q]
 
@@ -332,6 +359,23 @@ def run_pipeline(
                 "court": schedule_1_raw.get("court", "") or schedule_1_raw.get("triable_by", "")
             }
 
+    # If skip_llm_analysis is requested, skip LLM reasoning and return grounded retrieval fallback directly
+    if skip_llm_analysis:
+        fallback_analysis = _build_retrieval_fallback_analysis(reranked_candidates)
+        return {
+            "status": "success",
+            "sanitized_incident": sanitized_text,
+            "privacy_metadata": {
+                "detections": privacy_res.get("detections", []),
+                "replacement_map": privacy_res.get("replacement_map", {})
+            },
+            "analysis": fallback_analysis,
+            "limitations": ["Fast-path retrieval grounding used for FIR generation."],
+            "disclaimer": LEGAL_DISCLAIMER,
+            "reranked_candidates": reranked_candidates,
+            "pipeline_source": "retrieval_fallback"
+        }
+
     # 7. Analysis Context Limit: Select candidates for LLM prompt
     if analysis_candidate_limit is not None:
         analysis_candidates = (
@@ -353,7 +397,8 @@ def run_pipeline(
     analysis_result = analyze_incident(
         ner_result=ner_result,
         retrieval_result=analysis_candidates,
-        llm_client=llm_client
+        llm_client=llm_client,
+        workload=workload
     )
 
     analysis_items = analysis_result.get("analysis", [])
@@ -382,46 +427,157 @@ def run_pipeline(
     }
 
 
+def sanitize_and_validate_legal_chat_reply(bot_reply: str, structured_chat_context: list) -> str:
+    """
+    Automated final-response normalizer & contradiction fixer.
+    Enforces status-explanation consistency, statutory element correctness,
+    statutory punishment maximum safeguards, and bottom-line summary consistency.
+    """
+    import re
+    if not bot_reply or not isinstance(bot_reply, str):
+        return bot_reply
+
+    # Build section applicability map (section_num -> applicability)
+    sec_app_map = {}
+    for item in structured_chat_context:
+        s_raw = str(item.get("section", "")).replace("Section", "").strip()
+        app = str(item.get("overall_applicability", "uncertain")).lower()
+        if s_raw:
+            sec_app_map[s_raw] = app
+
+    # 1. Normalize Section Headings & Tags for Conditional Provisions
+    for sec, app in sec_app_map.items():
+        if app in ["potentially_applicable", "uncertain", "insufficient_information", "not_supported"]:
+            pattern_est = re.compile(
+                r'(\*\*?(?:BNS\s+)?Section\s+' + re.escape(sec) + r'\b[^\*\n]*\*\*?\s*[\—\:\-]\s*)\*?(?:Established|Facts?\s+establish[^\*\n]*)\*?',
+                re.IGNORECASE
+            )
+            bot_reply = pattern_est.sub(r'\1*Potentially Applicable (Material Fact Missing)*', bot_reply)
+
+            p_body = re.compile(r'\bFacts?\s+establish(?:es)?\s+(?:BNS\s+)?Section\s+' + re.escape(sec) + r'\b', re.IGNORECASE)
+            bot_reply = p_body.sub(f'Section {sec} may be applicable depending on missing details', bot_reply)
+
+    # 2. Statutory Element Overrides
+    if "130" in sec_app_map and sec_app_map["130"] != "established":
+        bot_reply = re.sub(
+            r'(\bSection\s+130\b[^\.\n]*?)(?:is\s+established|applies\s+because\s+of\s+the\s+attack)',
+            r'\1is potentially applicable (Section 130 concerns gestures or preparation causing apprehension of force, rather than the physical attack itself)',
+            bot_reply,
+            flags=re.IGNORECASE
+        )
+
+    if "309" in sec_app_map and sec_app_map["309"] != "established":
+        bot_reply = re.sub(
+            r'(\bSection\s+309\b[^\.\n]*?)(?:is\s+established|clearly\s+applies)',
+            r'\1is potentially applicable (theft becomes robbery under Section 309 when physical force, hurt, or fear is voluntarily caused in committing theft or carrying away property)',
+            bot_reply,
+            flags=re.IGNORECASE
+        )
+
+    # 3. Punishment Safeguards
+    bot_reply = re.sub(r'\bthe punishment is (\d+\s*(?:years?|months?))\b', r'imprisonment up to \1', bot_reply, flags=re.IGNORECASE)
+    bot_reply = re.sub(r'\bthe penalty is (\d+\s*(?:years?|months?))\b', r'imprisonment up to \1', bot_reply, flags=re.IGNORECASE)
+
+    # 4. Bottom-Line Summary Consistency Check
+    bottom_line_match = re.search(r'(###\s*6\.\s*Bottom line summary[^\n]*\n)(.*)', bot_reply, re.DOTALL | re.IGNORECASE)
+    if bottom_line_match:
+        bl_header = bottom_line_match.group(1)
+        bl_body = bottom_line_match.group(2).strip()
+
+        conditional_secs = [s for s, a in sec_app_map.items() if a in ["potentially_applicable", "uncertain", "insufficient_information"]]
+        has_contradiction = False
+
+        for c_sec in conditional_secs:
+            if re.search(r'\b(?:most likely|clearly applies|is established|definitely fits)\b[^\.\n]*?\bSection\s+' + re.escape(c_sec) + r'\b', bl_body, re.IGNORECASE):
+                has_contradiction = True
+                break
+            if re.search(r'\bSection\s+' + re.escape(c_sec) + r'\b[^\.\n]*?\b(?:is established|clearly applies|is the main charge)\b', bl_body, re.IGNORECASE):
+                has_contradiction = True
+                break
+
+        if has_contradiction:
+            cond_str = ", ".join([f"Section {s}" for s in conditional_secs])
+            new_bl_body = (
+                f"Because specific details remain unstated, candidate provisions like {cond_str} remain "
+                "potentially applicable. No legal section can be established as a final conclusion until these "
+                "missing statutory elements are investigated and confirmed."
+            )
+            bot_reply = bot_reply[:bottom_line_match.start()] + bl_header + new_bl_body
+
+    return bot_reply
+
+
 def run_chat_pipeline(
     raw_message: str,
+    history: Optional[List[Dict[str, str]]] = None,
     llm_client: Optional[LLMClient] = None
 ) -> Dict[str, Any]:
     """
     Executes the LawAid RAG Pipeline for Conversational Legal Chat.
 
     Flow:
-        Raw chat query
-        → Grounded RAG Pipeline (run_pipeline)
+        Raw chat query + History context
+        → Sentiment & Emotional Cue Detection
+        → Grounded RAG Pipeline (run_pipeline with deterministic query generator)
         → Section-based Deduplication & Grouping
         → Plain-language Conversational Synthesis
         → Sanitization & Safety Verification
 
     Args:
         raw_message (str): Input user chat query.
+        history (list, optional): Previous chat message objects [{"role": "user"|"assistant", "content": "..."}].
         llm_client (LLMClient, optional): LLM generation client instance.
 
     Returns:
-        dict: Conversational response containing:
-            - status ("ok")
-            - sanitized_incident
-            - reply (conversational plain-language answer)
-            - sections (list of clean BNS section titles)
-            - disclaimer (LEGAL_DISCLAIMER)
+        dict: Conversational response containing status, reply, sections, disclaimer.
     """
     import json
     import re
+    from ai.chat.sentiment import detect_sentiment
 
     if llm_client is None:
         llm_client = MultiProviderLLMFailoverClient()
 
-    # 1. Execute grounded RAG pipeline
-    pipeline_res = run_pipeline(raw_incident=raw_message, llm_client=llm_client)
+    # 1. Detect sentiment / emotional tone
+    sentiment_info = detect_sentiment(raw_message)
+    empathy_guide = sentiment_info.get("empathy_guide", "")
 
-    if pipeline_res.get("status") == "analysis_unavailable":
+    # 2. Formulate effective incident text combining history for follow-up questions
+    effective_incident = raw_message
+    history_str = ""
+    if history:
+        past_user_msgs = [m.get("content", "") for m in history if m.get("role") == "user" and m.get("content")]
+        formatted_history = []
+        for m in history[-6:]:
+            role_label = "Citizen" if m.get("role") == "user" else "Assistant"
+            formatted_history.append(f"{role_label}: {m.get('content', '')}")
+        history_str = "\n".join(formatted_history)
+
+        # If current query is short or a follow-up inquiry, combine previous user incident context
+        if past_user_msgs and len(raw_message.split()) < 15:
+            effective_incident = f"{' '.join(past_user_msgs[-2:])} {raw_message}"
+
+    # 3. Execute grounded RAG pipeline (using deterministic query generation for Chat to optimize latency)
+    pipeline_res = run_pipeline(
+        raw_incident=effective_incident,
+        llm_client=llm_client,
+        use_deterministic_queries=True,
+        workload=Workload.LEGAL_CHAT
+    )
+
+    is_fallback = (
+        pipeline_res.get("source") == "retrieval_fallback"
+        or pipeline_res.get("status") == "analysis_unavailable"
+    )
+
+    if is_fallback:
+        reply_text = (
+            "LawAid could not complete the legal analysis right now. Please try again shortly."
+        )
         return {
-            "status": "analysis_unavailable",
+            "status": "ok",
             "sanitized_incident": pipeline_res.get("sanitized_incident", raw_message),
-            "reply": "AI legal analysis is temporarily unavailable. The legal knowledge base was reached successfully, but the reasoning service is currently unavailable. Please try again shortly.",
+            "reply": reply_text,
             "sections": [],
             "disclaimer": LEGAL_DISCLAIMER
         }
@@ -430,7 +586,7 @@ def run_chat_pipeline(
     sanitized_text = pipeline_res.get("sanitized_incident", raw_message)
     limitations = pipeline_res.get("limitations", [])
 
-    # 2. Section-based Deduplication & Grouping
+    # 4. Section-based Deduplication & Grouping
     grouped_sections_map = {}
     for item in grounded_analysis:
         sec = str(item.get("section", "")).strip()
@@ -454,10 +610,13 @@ def run_chat_pipeline(
                 "section": sec,
                 "title": title_clean,
                 "applicability": applicability,
-                "reasonings": []
+                "reasonings": [],
+                "punishment": item.get("punishment"),
+                "bailable": item.get("bailable"),
+                "cognizable": item.get("cognizable"),
+                "court": item.get("court")
             }
 
-        # Update applicability priority: supported > uncertain > not_supported
         curr_app = grouped_sections_map[sec]["applicability"]
         if applicability == "supported" or (applicability == "uncertain" and curr_app == "not_supported"):
             grouped_sections_map[sec]["applicability"] = applicability
@@ -476,35 +635,78 @@ def run_chat_pipeline(
         clean_title = re.sub(r'\s*/\s*', ' / ', clean_title)
         label = f"Section {sec}: {clean_title}"
 
-        # ONLY include supported sections in the recommended sections list
-        if sec_info["applicability"] == "supported":
+        app = sec_info["applicability"]
+        # Relevance Filter (Requirement 3): Skip not_supported downstream candidates
+        if app == "not_supported":
+            continue
+
+        if app in ["supported", "established"]:
             formatted_sections.append(label)
 
         structured_chat_context.append({
             "section": f"Section {sec}",
             "title": clean_title,
-            "overall_applicability": sec_info["applicability"],
+            "overall_applicability": app,
+            "statutory_punishment_details": {
+                "punishment": sec_info.get("punishment"),
+                "bailable": sec_info.get("bailable"),
+                "cognizable": sec_info.get("cognizable"),
+                "court": sec_info.get("court")
+            },
             "legal_analysis_notes": sec_info["reasonings"]
         })
 
-    # 3. Conversational Synthesis Prompt
+    # 5. Conversational Synthesis Prompt
     prompt = (
         "You are LawAid's compassionate, plain-language Legal AI Assistant specializing in Indian criminal law "
         "(Bharatiya Nyaya Sanhita, BNS 2023 & Bharatiya Nagarik Suraksha Sanhita, BNSS 2023).\n"
-        "Summarize the grounded legal analysis below for the user in a clear, empathetic, conversational response.\n\n"
-        "STRICT CONSTRAINTS:\n"
-        "1. Base your legal explanations ONLY on the provided GROUNDED BNS ANALYSIS data.\n"
-        "2. Refer to BNS sections strictly as 'Section <number>' or 'BNS Section <number>' (e.g., Section 303, Section 329). NEVER mention or introduce Indian Penal Code (IPC) sections.\n"
-        "3. Expand BNS strictly as 'Bharatiya Nyaya Sanhita, 2023' and BNSS strictly as 'Bharatiya Nagarik Suraksha Sanhita, 2023'. NEVER expand BNS as 'Bihar National Security'.\n"
-        "4. Output strictly natural, plain-language legal guidance for a citizen. NEVER expose internal pipeline terms, implementation labels, or metadata such as 'reranked_candidates', 'document_id', 'vector distance', 'candidate', 'score', or 'raw metadata'.\n"
-        "5. Present multiple retrieved aspects of the same section (e.g. Criminal Trespass and House-trespass under Section 329) as a single coherent section discussion, explaining its scope rather than creating separate duplicate paragraphs.\n"
-        "6. RECOMMENDATION RESTRICTION: When advising what sections to register or report to the police (e.g., 'ask police to register under...'), mention ONLY sections whose overall_applicability is 'supported'. NEVER recommend or advise registering under any section marked 'uncertain' or 'not_supported'.\n"
-        "7. EXPLAINING UNCERTAIN OR NOT SUPPORTED PROVISIONS: If a section is marked 'uncertain' or 'not_supported', explain clearly why it is not established or what missing facts/intents would be required (e.g. unstated intent to commit an offence, unstated initial lawful possession, or unstated compound conditions). Do NOT assert that it definitely applies.\n"
-        "8. STATUTORY CONDITIONS & PROVISOS: For provisions with special penalty clauses or provisos (such as theft under 5,000 rupees), do NOT state that a single threshold (like property value) automatically triggers the provision. Explain generically that the statutory proviso requires meeting all conjunctive conditions (e.g. value under 5,000 rupees, first conviction status, and return/restoration of property).\n"
-        "9. Do NOT invent or hallucinate missing facts or legal section numbers.\n"
-        "10. Do NOT present yourself as a lawyer or provide formal legal representation.\n"
-        "11. Return ONLY valid JSON matching this schema:\n"
-        '{\n  "reply": "string (conversational response text)"\n}\n\n'
+        "Summarize the grounded legal analysis below for an ordinary citizen using simple, everyday English.\n\n"
+        "CITIZEN-FRIENDLY LANGUAGE RULES:\n"
+        "1. Explain all legal concepts as if speaking to an ordinary citizen with no legal background.\n"
+        "2. Prefer simple phrases like 'This section generally covers...', 'In simple words...', 'This may apply if...', 'We don't have enough information to say...'.\n"
+        "3. NEVER use formal legal jargon or pipeline technical terms such as 'mandatory elements', 'aggravating circumstances', 'applicability is uncertain', 'the offence that clearly fits this', 'reranked_candidates', or 'document_id'.\n"
+        "4. Do NOT remove legal accuracy and do NOT invent missing facts.\n"
+        "5. Keep section numbers and legal titles accurate.\n"
+        "6. Preserve uncertainty: if user facts are incomplete, state clearly what facts are missing rather than drawing a definite legal conclusion.\n\n"
+        "STATUTORY PUNISHMENT SAFEGUARD & SECTION EXPLAINING RULES (e.g. BNS Section 303):\n"
+        "7. ALWAYS PRESERVE STATUTORY MAXIMUMS & ALTERNATIVES:\n"
+        "   - When the statute states 'imprisonment for a term which may extend to X years, or with fine, or with both', ALWAYS describe it as a maximum ceiling or alternative (e.g. 'imprisonment up to X years, or fine, or both').\n"
+        "   - NEVER transform a maximum limit ('may extend to 10 years') into an absolute fixed sentence ('the punishment is 10 years').\n"
+        "   - For Section 303(2) BNS theft:\n"
+        "     * Ordinary / first conviction: imprisonment up to 3 years, OR fine, OR both.\n"
+        "     * Repeat conviction: rigorous imprisonment of 1 to 5 years AND fine (applies ONLY if accused has a prior theft conviction).\n"
+        "     * Petty theft proviso (<₹5,000 + restoration): community service upon first conviction.\n"
+        "     * NEVER state 1–5 years RI as the ordinary punishment for simple theft.\n"
+        "8. Refer to BNS sections strictly as 'Section <number>' or 'BNS Section <number>' (e.g., Section 303, Section 329). NEVER mention IPC sections.\n"
+        "9. Expand BNS strictly as 'Bharatiya Nyaya Sanhita, 2023' and BNSS strictly as 'Bharatiya Nagarik Suraksha Sanhita, 2023'.\n"
+        "10. STRICT GROUNDING STATUS & EXPLANATION MATCHING (FOUR GENERALIZED STATES):\n"
+        "    - ESTABLISHED: Label a section as 'Established' or 'Facts establish this provision' ONLY when the stated facts satisfy ALL mandatory statutory elements without requiring further confirmation or unstated facts. IF YOU STATE THAT FACTS ARE NEEDED OR STATUTORY INTENT/PURPOSE STILL NEEDS CONFIRMATION, YOU MUST NOT LABEL THE PROVISION AS ESTABLISHED.\n"
+        "    - POTENTIALLY APPLICABLE — MATERIAL FACT MISSING: Label a section as 'Potentially Applicable' when some elements fit, but specific material statutory facts (e.g. carrying/wearing property for §134, lurking/concealment for §331, manner of force/fear for §309) are unstated. State specifically what fact is missing.\n"
+        "    - NOT SUPPORTED: Label as 'Not Supported' when stated facts contradict or fail required statutory elements.\n"
+        "    - INSUFFICIENT INFORMATION: Label as 'Insufficient Information' when key facts are unstated so applicability cannot be evaluated.\n"
+        "11. GUIDED & INTERACTIVE RESPONSE STRUCTURE & BOTTOM-LINE CONSISTENCY:\n"
+        "    - Structure your answer using clean Markdown headings and bullet points: (1) What the law says about your situation, (2) Applicable sections, (3) Punishments and statutory conditions, (4) What we don't know yet & what details would help, (5) What you can do next (safety advice: 'If you feel that you remain at risk, tell the police about the safety concern and ask what immediate protection or other legal remedy is available in your circumstances'), and (6) Bottom line summary.\n"
+        "    - BOTTOM-LINE CONSISTENCY RULE: The bottom line summary MUST be generated strictly from the grounded provision states. Any provision that is conditional/uncertain (§309, §134, §331, etc.) MUST remain conditional in the bottom line. ONLY provisions that are fully established by stated facts may be summarized as established.\n"
+        "12. RETRIEVAL SYNTHESIS & STATUTORY ACCURACY:\n"
+        "    - When multiple retrieved clauses/branches concern the same section, synthesize them into a clear rule. Remove duplication and do not dump every branch into the user response.\n"
+        "    - Statutory elements must control language: compare mandatory statutory elements against explicitly stated facts without assuming unstated facts or replacing statutory terms with vague shortcuts.\n"
+        f"13. COMMUNICATION TONE & EMPATHY: {empathy_guide} Make this sentiment/empathy visibly clear in your opening paragraph before diving into legal details. "
+        "For distressed or scared citizens, start with a warm, gentle, empathetic opening like 'I am so sorry you are dealing with this. Being in this situation can be frightening...'. "
+        "For confused citizens, start with a reassuring opening like 'I understand this can be confusing. Let's break down which provisions may apply...'. "
+        "For angry or frustrated citizens, start with a calm, validating opening like 'I understand this situation is frustrating. Let's separate the legal issues from the next steps...'. "
+        "For neutral queries, proceed directly with a polite, professional tone. "
+        "For immediate danger or emergency, include a concise safety warning. "
+        "CRITICAL: Sentiment and empathy must NEVER change legal facts, retrieved sections, punishments, procedural classifications, or legal conclusions.\n"
+        "14. CONVERSATIONAL CONTEXT: Use the CONVERSATION HISTORY to naturally answer follow-up questions without requiring the user to repeat prior details.\n"
+        "15. FORMATTING: Use clean Markdown (bold headings with **text**, bullet points, numbered lists, and paragraphs). Do NOT output literal single-asterisk markdown or raw code blocks.\n"
+        "16. Return ONLY valid JSON matching this schema:\n"
+        '{\n  "reply": "string (conversational response text formatted in Markdown)"\n}\n\n'
+    )
+
+    if history_str:
+        prompt += f"CONVERSATION HISTORY:\n{history_str}\n\n"
+
+    prompt += (
         f"USER QUERY: {sanitized_text}\n\n"
         f"GROUNDED BNS ANALYSIS:\n{json.dumps(structured_chat_context, indent=2)}\n\n"
         f"LIMITATIONS & NOTES:\n{json.dumps(limitations, indent=2)}\n"
@@ -527,35 +729,34 @@ def run_chat_pipeline(
     except Exception:
         bot_reply = ""
 
-    # 4. Fallback if LLM synthesis returns empty
+    # 6. Fallback if LLM synthesis returns empty
     if not bot_reply:
-        lines = ["Based on the grounded legal analysis under the Bharatiya Nyaya Sanhita, 2023 (BNS):"]
+        lines = ["Based on the Bharatiya Nyaya Sanhita, 2023 (BNS):"]
         if structured_chat_context:
             supported_items = [i for i in structured_chat_context if i.get("overall_applicability") == "supported"]
             uncertain_items = [i for i in structured_chat_context if i.get("overall_applicability") != "supported"]
 
             if supported_items:
-                lines.append("Applicable Provisions to Register:")
+                lines.append("**Applicable Provisions:**")
                 for item in supported_items:
                     sec_name = item.get("section")
                     t_name = item.get("title")
                     notes = " ".join(item.get("legal_analysis_notes", []))
-                    lines.append(f"- {sec_name} ({t_name}): Supported. {notes}")
+                    lines.append(f"- **{sec_name} ({t_name})**: {notes}")
 
             if uncertain_items:
-                lines.append("Provisions requiring further factual clarification (not directly applicable without further facts):")
+                lines.append("**Provisions requiring further information:**")
                 for item in uncertain_items:
                     sec_name = item.get("section")
                     t_name = item.get("title")
-                    app = item.get("overall_applicability")
                     notes = " ".join(item.get("legal_analysis_notes", []))
-                    lines.append(f"- {sec_name} ({t_name}): Status is {app}. {notes}")
+                    lines.append(f"- **{sec_name} ({t_name})**: Additional facts needed. {notes}")
         else:
-            lines.append("No specific BNS provisions could be confirmed from the facts provided. Please provide more concrete details about what occurred.")
+            lines.append("No specific legal provisions could be confirmed from the facts provided. Please share more details about what happened.")
 
         bot_reply = "\n\n".join(lines)
 
-    # 5. Strict post-processing sanitization filter
+    # 7. Strict post-processing sanitization & automated contradiction normalization
     bot_reply = re.sub(r'\(?reranked_candidates\)?', '', bot_reply, flags=re.IGNORECASE)
     bot_reply = re.sub(r'\bdocument_id\b', '', bot_reply, flags=re.IGNORECASE)
     bot_reply = re.sub(r'\bcandidate_id\b', '', bot_reply, flags=re.IGNORECASE)
@@ -565,6 +766,8 @@ def run_chat_pipeline(
 
     bot_reply = re.sub(r'\bIPC\b', 'BNS', bot_reply)
     bot_reply = re.sub(r'Indian Penal Code', 'Bharatiya Nyaya Sanhita, 2023', bot_reply, flags=re.IGNORECASE)
+
+    bot_reply = sanitize_and_validate_legal_chat_reply(bot_reply, structured_chat_context)
 
     bot_reply = re.sub(r'  +', ' ', bot_reply).strip()
 
