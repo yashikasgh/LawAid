@@ -1,10 +1,15 @@
+import pytest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 from app.main import app
 from app.core.deps import get_current_user
 from app.models.user import User
 
-app.dependency_overrides[get_current_user] = lambda: User(id=1, email="test@example.com", role="citizen")
+@pytest.fixture(autouse=True)
+def override_chat_user():
+    app.dependency_overrides[get_current_user] = lambda: User(id=1, email="test@example.com", role="citizen")
+    yield
+    app.dependency_overrides.pop(get_current_user, None)
 
 client = TestClient(app)
 

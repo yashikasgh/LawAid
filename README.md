@@ -32,4 +32,9 @@ legal-information retrieval.
 
 5. The AI pipeline has separate dependencies in `ai/requirements.txt`. It also
    requires Ollama with the `nomic-embed-text` embedding model and the spaCy
-   `en_core_web_sm` model before the BNS index can be built.
+   `en_core_web_sm` model:
+
+   ```powershell
+   python -m pip install -r ai/requirements.txt
+   python -m spacy download en_core_web_sm
+   ```

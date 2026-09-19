@@ -242,23 +242,40 @@ class GroqLLMClient(LLMClient):
                 "model": self.model_name,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.0,
-                "timeout": 45.0
+                "timeout": 15.0
             }
-            # Disabled server-side response_format for Groq as local parsing handles JSON safely
-            # and Groq's server-side JSON validation causes HTTP 400 json_validate_failed on large prompts.
+            if is_json_mode:
+                req_kwargs["response_format"] = {"type": "json_object"}
+
+            # Give reasoning models (like gpt-oss-120b) sufficient room for reasoning + content
             if max_tokens is not None:
-                req_kwargs["max_completion_tokens"] = max_tokens
+                req_kwargs["max_completion_tokens"] = max(max_tokens, 2500)
+            else:
+                req_kwargs["max_completion_tokens"] = 2500
+
             response = self.client.chat.completions.create(**req_kwargs)
             if response.choices and len(response.choices) > 0:
-                message = response.choices[0].message
-                return message.content if message and message.content else ""
+                choice = response.choices[0]
+                message = choice.message
+                content = message.content or ""
+                finish_reason = getattr(choice, "finish_reason", None)
+
+                # Keep message.content as the only user-facing final answer.
+                if content and content.strip():
+                    return content.strip()
+
+                # Diagnostic check for empty content (do NOT fallback to or expose internal reasoning)
+                has_reasoning = bool(getattr(message, "reasoning", None))
+                has_tool_calls = bool(getattr(message, "tool_calls", None))
+                print(f"[GroqLLMClient] Empty final content for {self.model_name}: finish_reason='{finish_reason}', has_reasoning={has_reasoning}, has_tool_calls={has_tool_calls}")
+
             return ""
         except Exception as e:
             raise RuntimeError(f"Groq API text generation failed for model '{self.model_name}': {e}")
 
 
 class GeminiLLMClient(LLMClient):
-    """Google Gemini API text generation client adapter."""
+    """Google Gemini API text generation client adapter using the official google.genai SDK."""
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
         try:
             from dotenv import load_dotenv
@@ -274,34 +291,67 @@ class GeminiLLMClient(LLMClient):
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY environment variable is missing.")
 
-        self.model_name = model_name or os.environ.get("GEMINI_MODEL") or "gemini-3.8-flash"
+        self.model_name = model_name or os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash"
 
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel(
-                model_name=self.model_name,
-                generation_config=genai.GenerationConfig(
-                    response_mime_type="application/json",
-                    temperature=0.0
-                )
-            )
+            from google import genai
+            self.client = genai.Client(api_key=self.api_key)
         except Exception as e:
             raise RuntimeError(f"Failed to initialize Gemini client for model '{self.model_name}': {e}")
 
     def generate(self, prompt: str, max_tokens: Optional[int] = None, **kwargs) -> str:
         try:
-            import google.generativeai as genai
+            from google import genai
+            from google.genai import types
+            from google.genai.errors import APIError
+
+            effective_max_tokens = max(max_tokens or 8192, 8192)
             config_kwargs = {
                 "response_mime_type": "application/json",
-                "temperature": 0.0
+                "temperature": 0.0,
+                "max_output_tokens": effective_max_tokens,
+                "automatic_function_calling": types.AutomaticFunctionCallingConfig(disable=True)
             }
-            if max_tokens is not None:
-                config_kwargs["max_output_tokens"] = max_tokens
-            gen_config = genai.GenerationConfig(**config_kwargs)
-            response = self.model.generate_content(prompt, generation_config=gen_config, request_options={"timeout": 45.0})
-            if hasattr(response, "text") and response.text:
-                return response.text
+
+            gen_config = types.GenerateContentConfig(**config_kwargs)
+
+            # Candidate model list bounded to active valid models
+            candidate_models = [self.model_name]
+            if "gemini-flash-latest" not in candidate_models:
+                candidate_models.append("gemini-flash-latest")
+
+            last_error = None
+            for model_id in candidate_models:
+                try:
+                    response = self.client.models.generate_content(
+                        model=model_id,
+                        contents=prompt,
+                        config=gen_config
+                    )
+                    
+                    if response and response.candidates and len(response.candidates) > 0:
+                        cand = response.candidates[0]
+                        finish_reason = getattr(cand, "finish_reason", None)
+                        finish_str = str(finish_reason).upper()
+                        if "MAX_TOKENS" in finish_str or "LENGTH" in finish_str:
+                            raise RuntimeError(f"Gemini generation for {model_id} hit output token limit ({finish_reason}).")
+
+                    text = getattr(response, "text", "") or ""
+                    if text and text.strip():
+                        return text.strip()
+                except APIError as api_err:
+                    last_error = api_err
+                    if getattr(api_err, "code", None) in (503, 404) or "503" in str(api_err) or "404" in str(api_err):
+                        continue
+                    raise api_err
+                except Exception as ex:
+                    last_error = ex
+                    if "503" in str(ex) or "404" in str(ex):
+                        continue
+                    raise ex
+
+            if last_error:
+                raise last_error
             return ""
         except Exception as e:
             raise RuntimeError(f"Gemini API text generation failed for model '{self.model_name}': {e}")
@@ -401,7 +451,8 @@ class OpenRouterLLMClient(LLMClient):
                 client = OpenAI(
                     base_url=self.base_url,
                     api_key=self.api_key,
-                    timeout=45.0,
+                    timeout=30.0,
+                    max_retries=0,
                     default_headers={
                         "HTTP-Referer": "https://lawaid.app",
                         "X-Title": "LawAid RAG Legal Analyzer"
@@ -417,7 +468,10 @@ class OpenRouterLLMClient(LLMClient):
                 response = client.chat.completions.create(**sdk_kwargs)
                 if response.choices and len(response.choices) > 0:
                     message = response.choices[0].message
-                    return message.content if message and message.content else ""
+                    content = message.content or ""
+                    if content and content.strip():
+                        return content.strip()
+                    return ""
                 return ""
             except ImportError:
                 try:
@@ -426,7 +480,7 @@ class OpenRouterLLMClient(LLMClient):
                         f"{self.base_url}/chat/completions",
                         headers=headers,
                         json=payload,
-                        timeout=45
+                        timeout=30
                     )
                     if resp.status_code != 200:
                         raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
@@ -434,7 +488,8 @@ class OpenRouterLLMClient(LLMClient):
                     choices = data.get("choices", [])
                     if choices:
                         msg = choices[0].get("message", {})
-                        return msg.get("content", "")
+                        content = msg.get("content", "")
+                        return content.strip() if content else ""
                     return ""
                 except ImportError:
                     import urllib.request
@@ -446,13 +501,14 @@ class OpenRouterLLMClient(LLMClient):
                         method="POST"
                     )
                     try:
-                        with urllib.request.urlopen(req, timeout=45) as resp:
+                        with urllib.request.urlopen(req, timeout=30) as resp:
                             res_body = resp.read().decode("utf-8")
                             data = json.loads(res_body)
                             choices = data.get("choices", [])
                             if choices:
                                 msg = choices[0].get("message", {})
-                                return msg.get("content", "")
+                                content = msg.get("content", "")
+                                return content.strip() if content else ""
                             return ""
                     except urllib.error.HTTPError as http_err:
                         body = http_err.read().decode("utf-8", errors="ignore")
@@ -534,12 +590,12 @@ class ProviderHealthTracker:
             elif "401" in err_msg or "user not found" in err_lower or "unauthorized" in err_lower:
                 status = ProviderHealthStatus.AUTH_DISABLED
                 cooldown_sec = 86400 * 365
-            elif error_category in ("rate_limited", "request_too_large") or "429" in err_msg or "413" in err_msg:
+            elif error_category in ("rate_limited", "request_too_large") or "429" in err_msg or "413" in err_msg or "tpd" in err_lower or "tokens per day" in err_lower:
                 status = ProviderHealthStatus.COOLING_DOWN
-                cooldown_sec = 60
+                cooldown_sec = 15
             else:
                 status = ProviderHealthStatus.COOLING_DOWN
-                cooldown_sec = 30
+                cooldown_sec = 15
 
             self._health_map[key] = {
                 "status": status,
@@ -631,26 +687,26 @@ class MultiProviderLLMFailoverClient(LLMClient):
         gemini_key = os.environ.get("GEMINI_API_KEY")
         openrouter_key = os.environ.get("OPENROUTER_API_KEY")
 
-        # 1. Groq GPT-OSS 20B
-        if groq_key:
-            try:
-                chain.append(GroqLLMClient(api_key=groq_key, model_name="openai/gpt-oss-20b"))
-            except Exception as e:
-                print(f"[LLM Failover Config Warning] Groq 20B init skipped: {e}")
-
-        # 2. Gemini 3.6 Flash
-        if gemini_key:
-            try:
-                chain.append(GeminiLLMClient(api_key=gemini_key, model_name="gemini-3.6-flash"))
-            except Exception as e:
-                print(f"[LLM Failover Config Warning] Gemini 3.6 Flash init skipped: {e}")
-
-        # 3. Groq GPT-OSS 120B
+        # 1. Groq GPT-OSS 120B
         if groq_key:
             try:
                 chain.append(GroqLLMClient(api_key=groq_key, model_name="openai/gpt-oss-120b"))
             except Exception as e:
                 print(f"[LLM Failover Config Warning] Groq 120B init skipped: {e}")
+
+        # 2. Gemini
+        if gemini_key:
+            try:
+                chain.append(GeminiLLMClient(api_key=gemini_key, model_name="gemini-3.6-flash"))
+            except Exception as e:
+                print(f"[LLM Failover Config Warning] Gemini init skipped: {e}")
+
+        # 3. Groq GPT-OSS 20B
+        if groq_key:
+            try:
+                chain.append(GroqLLMClient(api_key=groq_key, model_name="openai/gpt-oss-20b"))
+            except Exception as e:
+                print(f"[LLM Failover Config Warning] Groq 20B init skipped: {e}")
 
         # 4. OpenRouter Default Router
         if openrouter_key:
@@ -810,6 +866,64 @@ class MultiProviderLLMFailoverClient(LLMClient):
                     "latency_ms": latency_ms
                 })
 
+        # Fallback pass: If no provider actually executed because all were skipped on health check, force attempt on active non-disabled providers
+        attempted_any = any(t.get("status") in ("success", "failed") for t in self.last_execution_trace)
+        if not attempted_any:
+            print("[LLM Failover Trace] All providers were skipped on health check. Forcing attempt on available providers...")
+            for provider_client in ordered_providers:
+                provider_name = provider_client.__class__.__name__
+                model_name = getattr(provider_client, "model_name", "unknown")
+                status, _ = self.health_tracker.get_status(provider_client)
+                if status == ProviderHealthStatus.AUTH_DISABLED:
+                    continue
+
+                start_time = time.time()
+                try:
+                    raw_out = provider_client.generate(prompt, max_tokens=max_tokens, workload=workload)
+                    latency_ms = round((time.time() - start_time) * 1000, 2)
+
+                    if not raw_out or not raw_out.strip():
+                        raise RuntimeError("Provider returned empty string output.")
+
+                    is_json_workload = (
+                        workload in (Workload.CITIZEN_FIR_ANALYSIS, Workload.POLICE_FIR_DRAFT)
+                        or "json" in prompt.lower()
+                    )
+                    if is_json_workload:
+                        try:
+                            parsed = _parse_json_from_llm(raw_out)
+                            if not isinstance(parsed, dict):
+                                raise ValueError("Output is not a valid JSON dictionary.")
+                        except Exception as json_err:
+                            raise RuntimeError(f"Output failed structured JSON validation: {json_err}")
+
+                    self.health_tracker.record_success(provider_client)
+                    self.last_execution_trace.append({
+                        "provider": provider_name,
+                        "model": model_name,
+                        "status": "success",
+                        "latency_ms": latency_ms
+                    })
+                    self.active_provider_info = {
+                        "provider": provider_name,
+                        "model": model_name
+                    }
+                    return raw_out
+                except Exception as err:
+                    latency_ms = round((time.time() - start_time) * 1000, 2)
+                    err_msg = str(err)
+                    error_category = _classify_llm_error(err_msg)
+                    self.health_tracker.record_failure(provider_client, err_msg)
+                    print(f"[LLM Failover Trace] Forced fallback {provider_name} ({model_name}) failed [{error_category}] in {latency_ms}ms: {err_msg}")
+                    self.last_execution_trace.append({
+                        "provider": provider_name,
+                        "model": model_name,
+                        "status": "failed",
+                        "error_category": error_category,
+                        "error": err_msg,
+                        "latency_ms": latency_ms
+                    })
+
         raise RuntimeError("All LLM providers in failover chain failed.")
 
 
@@ -831,17 +945,22 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any], minimal_schema:
                 continue
             seen_doc_ids.add(doc_id)
 
+            act_code = doc.get("act", "BNS")
+            act_full = doc.get("act_name", "Bharatiya Nyaya Sanhita (BNS), 2023")
             sec_num = str(doc.get("section", "")).strip() or "unknown"
+            sec_key = f"{act_code}_{sec_num}"
             target_text = doc.get("target_clause_text") or doc.get("text", "")
             snippet_text = target_text[:350] + ("..." if len(target_text) > 350 else "")
 
-            if sec_num not in section_groups:
+            if sec_key not in section_groups:
                 sec_def = doc.get("section_definition", "")
                 clean_sec_def = sec_def if sec_def and sec_def.strip() != target_text.strip() else ""
                 if len(clean_sec_def) > 250:
                     clean_sec_def = clean_sec_def[:247] + "..."
 
                 sec_entry = {
+                    "act": act_code,
+                    "act_name": act_full,
                     "section": doc.get("section", ""),
                     "title": doc.get("title", "")
                 }
@@ -849,8 +968,8 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any], minimal_schema:
                     sec_entry["section_definition"] = clean_sec_def
                 sec_entry["clauses"] = []
 
-                section_groups[sec_num] = sec_entry
-                section_order.append(sec_num)
+                section_groups[sec_key] = sec_entry
+                section_order.append(sec_key)
 
             clause_entry = {
                 "id": doc_id,
@@ -863,28 +982,32 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any], minimal_schema:
                 if sched_offence and sched_offence.strip():
                     clause_entry["schedule_1_offence"] = sched_offence.strip()
 
-            section_groups[sec_num]["clauses"].append(clause_entry)
+            section_groups[sec_key]["clauses"].append(clause_entry)
 
-    for sec_num in section_order:
-        formatted_context_sections.append(section_groups[sec_num])
+    for sec_key in section_order:
+        formatted_context_sections.append(section_groups[sec_key])
 
     if minimal_schema:
         prompt = (
-            "You are an expert legal analysis system for Indian criminal law (Bharatiya Nyaya Sanhita - BNS 2023).\n"
+            "You are an expert legal analysis system for Indian criminal law (Bharatiya Nyaya Sanhita - BNS 2023 and Bharatiya Nagarik Suraksha Sanhita - BNSS 2023).\n"
             "Analyze the provided INCIDENT FACTS strictly using ONLY the RETRIEVED BNS LEGAL CONTEXT provided below.\n\n"
             "STRICT GROUNDING & DOCUMENT ID RULES:\n"
-            "1. Every document_id in your response MUST be copied EXACTLY as shown in the \"id\" field of RETRIEVED BNS LEGAL CONTEXT (copy the string in the \"id\" field EXACTLY).\n"
-            "2. Do NOT return a bare section number such as \"303\" or \"304\". Return the full exact identifier string from the context.\n"
-            "3. Do NOT invent, normalize, abbreviate, or transform document IDs.\n"
-            "4. Only use document IDs that appear in the supplied RETRIEVED BNS LEGAL CONTEXT.\n"
-            "5. EVALUATE FOUR GENERALIZED GROUNDING STATES:\n"
+            "1. Indian criminal law strictly separates Substantive Offences (BNS) from Criminal Procedure (BNSS).\n"
+            "   - BNS (Bharatiya Nyaya Sanhita) defines criminal offences, elements, and punishments (e.g. BNS Section 303 for Theft, BNS Section 173 for Bribery).\n"
+            "   - BNSS (Bharatiya Nagarik Suraksha Sanhita) governs procedure, FIR registration, investigation, arrest, and bail (e.g. BNSS Section 173 for FIR filing/registration, BNSS Section 35/41 for arrest, BNSS Section 480 for bail).\n"
+            "2. DO NOT mislabel procedural provisions as BNS offences. Use the explicit 'act' metadata field in RETRIEVED BNS LEGAL CONTEXT.\n"
+            "3. Every document_id in your response MUST be copied EXACTLY as shown in the \"id\" field of RETRIEVED BNS LEGAL CONTEXT (copy the string in the \"id\" field EXACTLY).\n"
+            "4. Do NOT return a bare section number such as \"303\" or \"304\". Return the full exact identifier string from the context.\n"
+            "5. Do NOT invent, normalize, abbreviate, or transform document IDs.\n"
+            "6. Only use document IDs that appear in the supplied RETRIEVED BNS LEGAL CONTEXT.\n"
+            "7. EVALUATE FOUR GENERALIZED GROUNDING STATES:\n"
             "   - 'established' (or 'supported'): Mark ONLY if explicitly stated facts satisfy ALL mandatory statutory elements without requiring any further confirmation or unstated facts.\n"
-            "   - 'potentially_applicable' (or 'uncertain'): Mark if some statutory elements fit, but one or more material statutory facts (e.g. carrying/wearing property, stealth/concealment, manner of force, intent) are missing or unstated.\n"
-            "   - 'not_supported': Mark if stated facts explicitly fail or contradict required statutory elements (e.g. no property taken for theft, or no physical injury for hurt).\n"
+            "   - 'potentially_applicable' (or 'uncertain'): Mark if some statutory elements fit, but one or more material statutory facts are missing or unstated.\n"
+            "   - 'not_supported': Mark if stated facts explicitly fail or contradict required statutory elements.\n"
             "   - 'insufficient_information': Mark if key facts are unstated so applicability cannot be assessed at all.\n"
-            "6. STRICT CONSISTENCY RULE: If a provision is marked 'established', your reasoning MUST NOT state that material facts, intent requirements, or circumstances still need confirmation. If any statutory element requires confirmation, classify as 'potentially_applicable' or 'insufficient_information'.\n"
-            "7. STATUTORY PUNISHMENT SAFEGUARD: Preserve statutory maximums and alternatives (e.g. 'may extend to X years' or 'up to X years'). Never state a maximum ceiling as a mandatory fixed sentence.\n"
-            "8. Do NOT invent missing facts.\n\n"
+            "8. STRICT CONSISTENCY RULE: If a provision is marked 'established', your reasoning MUST NOT state that material facts, intent requirements, or circumstances still need confirmation.\n"
+            "9. STATUTORY PUNISHMENT SAFEGUARD: Preserve statutory maximums and alternatives (e.g. 'may extend to X years' or 'up to X years'). Never state a maximum ceiling as a mandatory fixed sentence.\n"
+            "10. Do NOT invent missing facts.\n\n"
             "JSON OUTPUT SCHEMA FORMAT:\n"
             "{\n"
             '  "status": "success",\n'
@@ -908,95 +1031,80 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any], minimal_schema:
         return prompt
 
     prompt = (
-        "You are an expert legal analysis system for Indian criminal law (Bharatiya Nyaya Sanhita - BNS 2023).\n"
+        "You are an expert legal analysis system for Indian criminal law (Bharatiya Nyaya Sanhita - BNS 2023 and Bharatiya Nagarik Suraksha Sanhita - BNSS 2023).\n"
         "Analyze the provided INCIDENT FACTS strictly using ONLY the RETRIEVED BNS LEGAL CONTEXT provided below.\n\n"
         "STRICT GROUNDING & APPLICABILITY RULES:\n"
-        "Evaluate statutory scope of each candidate section against stated facts.\n"
-        "Do NOT equate generic words like 'property' or 'injury' without satisfying statutory scope.\n"
-        "STRICT PROVISO & CLAUSE PREREQUISITE EVALUATION:\n"
+        "1. Indian criminal law strictly separates Substantive Offences (BNS) from Criminal Procedure (BNSS).\n"
+        "   - BNS defines offences and punishments (e.g. Theft, Bribery, Assault).\n"
+        "   - BNSS defines procedure, FIR registration, investigation, arrest, and bail rights (e.g. BNSS Section 173 for FIR registration upon information of a cognizable offence).\n"
+        "2. DO NOT describe FIR registration or procedural rights as offences under BNS.\n"
+        "3. STRICTLY DISTINGUISH ALLEGATIONS FROM PROVEN GUILT:\n"
+        "   - An FIR contains allegations/claims filed with law enforcement. Never state that a person is guilty or that offences are conclusively proved.\n"
+        "   - Use phrases such as 'Why Section X may apply' and 'relevant for consideration'.\n"
+        "   - End plain_summary with: 'These are allegations/facts recorded in the FIR. They are not, by themselves, a final determination that an offence has been proved.'\n\n"
+        "4. CONDITIONAL SECTIONS & STATUTORY SCOPE GATING:\n"
+        "   - Section 134 BNS: Concerns assault/criminal force in an attempt to commit theft of property carried by a person. Mark conditional/uncertain unless facts show property was carried on person AND assault/force was used in theft attempt.\n"
+        "   - Section 309 BNS (Robbery): Requires voluntary causing or attempting to cause death, hurt, wrongful restraint, or fear of instant death/hurt/restraint in connection with theft. Generic physical force alone does not automatically make theft robbery unless statutory tests are met.\n"
+        "   - Section 307 BNS: Require statutory preparation for hurt/death/restraint/fear supported by facts.\n"
+        "   - Section 317 BNS: Requires receiving, retaining, or concealing stolen property with knowledge or dishonest belief. Surface ONLY if FIR facts state receiving/retaining/concealing.\n"
+        "   - Section 306 BNS: Surface ONLY if FIR facts show clerk or servant relationship.\n"
+        "   - Section 329 BNS: Require statutory intent for criminal trespass.\n"
+        "   - Section 330 BNS: Distinguish definition from punishment provisions.\n\n"
+        "5. PUNISHMENT GROUNDING:\n"
+        "   - Preserve statutory maximums and alternatives ('up to', 'or', 'and').\n"
+        "   - For Section 303 (Theft), preserve all 3 branches: ordinary theft (up to 3 years/fine), repeat conviction (1 to 5 years/fine), and petty theft proviso (value < 5000 INR & restored for 1st conviction -> community service).\n\n"
+        "6-PASS GENERIC STATUTORY APPLICABILITY REASONING:\n"
         "==================================================\n"
-        "6-PASS GENERIC STATUTORY APPLICABILITY REASONING\n"
-        "==================================================\n\n"
         "PASS 1 — STATUTORY REQUIREMENT EXTRACTION:\n"
-        "For EACH candidate provision independently, derive from the supplied statutory text:\n"
-        "1. Core legal elements\n"
-        "2. Conditional/proviso elements\n"
-        "3. Aggravated branch elements\n"
-        "4. Mitigating branch elements\n"
-        "5. Special capacity/relationship requirements (e.g., clerk, servant, public servant, trustee, carrier)\n"
-        "6. Specific object/instrumentality requirements (e.g., property mark, forged document, vehicle, weapon)\n"
-        "7. Required consequence/outcome (e.g., death, grievous hurt, wrongful gain, loss)\n"
-        "8. Required victim/offender/property state (e.g., active possession vs unpossessed/found, public place, night-time)\n"
-        "9. Mens rea requirements (e.g., dishonest, fraudulent, rash, negligent, intentional, knowledge)\n"
-        "10. Any other material statutory prerequisite\n"
-        "Do NOT assume these categories exist in every section. Populate a category only when supported by the actual statutory text.\n\n"
-        "PASS 2 — EVIDENCE STATUS FOR EVERY MATERIAL REQUIREMENT:\n"
-        "For every extracted requirement, classify the incident evidence strictly as:\n"
-        "- SATISFIED: Explicitly supported by affirmative factual evidence in stated INCIDENT FACTS.\n"
-        "- MISSING: Required by the statute but not affirmatively established by the INCIDENT FACTS.\n"
-        "- CONTRADICTED: Incident explicitly establishes that the requirement did not occur.\n"
-        "- NOT_APPLICABLE: Only for conditional/aggravated/mitigating branches that are not triggered.\n\n"
-        "CRITICAL ANTI-HALLUCINATION & AFFIRMATIVE EVIDENCE GATING RULES:\n"
-        "- The incident is the ONLY source of factual evidence.\n"
-        "- The candidate text is the ONLY source of statutory requirements.\n"
-        "- A mandatory requirement MUST NOT be classified as satisfied merely because it is compatible, plausible, or because another element is satisfied.\n"
-        "- Do NOT infer missing facts.\n"
-        "- Require affirmative factual evidence for all material prerequisites.\n\n"
+        "Derive core legal elements, conditional elements, aggravated elements, and capacity requirements from the supplied statutory text.\n\n"
+        "PASS 2 — EVIDENCE STATUS:\n"
+        "Classify requirement evidence as SATISFIED, MISSING, CONTRADICTED, or NOT_APPLICABLE based strictly on stated facts.\n\n"
         "PASS 3 — CORE VS CONDITIONAL STRUCTURE:\n"
-        "- Preserve Core vs Conditional architecture.\n"
-        "- A missing conditional proviso MUST NOT invalidate an otherwise supported core offence definition.\n"
-        "- If the property value is UNSTATED or MISSING from the facts, mark that specific proviso candidate document as 'uncertain' or 'not_supported'.\n"
-        "- Section 331 BNS requires lurking house-trespass or house-breaking (active concealment, stealth, breaking doors/windows/locks, or forcible entry). Unauthorized entry into a house alone constitutes house-trespass under Section 329. If the incident facts state unauthorized entry without affirmative evidence of lurking or breaking, mark Section 329 as 'supported' and mark Section 331 as 'uncertain' or 'not_supported'.\n\n"
+        "Preserve core vs conditional architecture. Do not invalidate core definition if conditional proviso is missing.\n\n"
         "PASS 4 — STRICT APPLICABILITY DECISION:\n"
-        "- 'supported': ALL mandatory core elements affirmatively satisfied, NO mandatory core element contradicted, required mens rea supported by facts, required capacity/relationship supported when required.\n"
-        "- 'not_supported': Mandatory requirement explicitly contradicted OR a mandatory special prerequisite (such as special capacity, specific object/instrumentality, or specific statutory outcome) is absent from the stated incident facts.\n"
-        "- 'uncertain': Material requirement could be true but incident simply lacks enough information to establish it.\n"
-        "- Be conservative with 'supported'. Do NOT convert every unknown into 'not_supported' automatically. Preserve 'uncertain' where appropriate.\n\n"
+        "Mark 'supported' ONLY if all mandatory core elements are satisfied. Mark 'uncertain' if material facts are unstated.\n\n"
         "PASS 5 — CANDIDATE RELATIONSHIP ANALYSIS:\n"
-        "After evaluating candidates independently, perform a separate generic relationship analysis across retrieved candidates:\n"
-        "- Determine candidate relationships (specific_over_general, ancillary_conduct, mutually_exclusive, etc.).\n"
-        "- Only suppress a candidate when statutory text AND incident facts justify that relationship.\n"
-        "- Explain the statutory basis for any relationship decision.\n\n"
+        "Analyze candidate relationships (specific_over_general, ancillary_conduct, etc.).\n\n"
         "PASS 6 — FINAL CLASSIFICATION & STRUCTURED OUTPUT:\n"
         "Return structured JSON matching the schema.\n\n"
         "JSON OUTPUT SCHEMA FORMAT:\n"
         "{\n"
         '  "status": "success",\n'
+        '  "plain_summary": "Natural factual summary based specifically on uploaded FIR facts, ending with mandatory disclaimer: These are allegations/facts recorded in the FIR. They are not, by themselves, a final determination that an offence has been proved.",\n'
+        '  "what_fir_alleges": "Plain-language summary of specific allegations recorded in the FIR.",\n'
         '  "analysis": [\n'
         "    {\n"
         '      "document_id": "string",\n'
+        '      "section": "string",\n'
+        '      "title": "string",\n'
         '      "unit_type": "core_definition | conditional_proviso | aggravated_branch | mitigating_branch",\n'
         '      "applicability": "supported | uncertain | not_supported",\n'
-        '      "statutory_structure": {\n'
-        '        "structural_unit_type": "core_definition | conditional_proviso | aggravated_branch | mitigating_branch",\n'
-        '        "core_elements": ["string"],\n'
-        '        "conditional_elements": ["string"],\n'
-        '        "aggravated_elements": ["string"],\n'
-        '        "mitigating_elements": ["string"]\n'
-        '      },\n'
-        '      "prerequisite_evidence": [\n'
-        '        {\n'
-        '          "requirement": "string",\n'
-        '          "requirement_type": "core | conditional | aggravated | mitigating",\n'
-        '          "evidence_status": "satisfied | missing | contradicted | not_applicable",\n'
-        '          "incident_evidence": "string",\n'
-        '          "reason": "string"\n'
-        '        }\n'
-        '      ],\n'
-        '      "core_elements": ["string"],\n'
-        '      "conditional_elements": ["string"],\n'
-        '      "satisfied_elements": ["string"],\n'
-        '      "missing_elements": ["string"],\n'
-        '      "contradicted_elements": ["string"],\n'
-        '      "relationship_analysis": {\n'
-        '        "relationship_type": "none | specific_over_general | ancillary_conduct | mutually_exclusive | alternative_branch | independent_concurrent",\n'
-        '        "related_candidate": "string",\n'
-        '        "reason": "string"\n'
-        '      },\n'
+        '      "law_requires": ["Statutory requirement 1", "Statutory requirement 2"],\n'
+        '      "fir_states": ["Corresponding fact from FIR"],\n'
+        '      "why_may_apply": "Specific factual-legal explanation why Section X may apply",\n'
+        '      "what_remains_uncertain": ["Missing or unverified fact 1"],\n'
+        '      "assessment": "The allegations recorded in the FIR make Section X relevant for consideration; the FIR itself does not establish guilt.",\n'
         '      "reasoning": "string",\n'
         '      "explanation": "string"\n'
         "    }\n"
         "  ],\n"
+        '  "unestablished_facts": [\n'
+        '    "Whether the allegations are ultimately proved in court",\n'
+        '    "Whether the accused possessed the required criminal intent"\n'
+        '  ],\n'
+        '  "clarifying_details": [\n'
+        '    "Was the stolen property being carried on the victim\'s person?",\n'
+        '    "Was physical force or weapon used during the incident?"\n'
+        '  ],\n'
+        '  "rights": [\n'
+        '    "Under Section 173(2) BNSS, right to a free copy of the recorded FIR immediately.",\n'
+        '    "Under Article 22(1) of the Constitution and Section 47 BNSS, right to consult legal counsel."\n'
+        '  ],\n'
+        '  "next_steps": [\n'
+        '    "Preserve physical and digital FIR copies.",\n'
+        '    "Verify dates, times, vehicle/person details in the FIR."\n'
+        '  ],\n'
+        '  "bottom_line": "Concise summary answering what FIR alleges, which provisions are relevant vs conditional, what is uncertain, and what to do next without declaring guilt.",\n'
         '  "limitations": ["string"]\n'
         "}\n\n"
         "INCIDENT FACTS:\n"
@@ -1011,29 +1119,39 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any], minimal_schema:
 
 
 def _parse_json_from_llm(raw_text: str) -> Dict[str, Any]:
-    """Clean markdown formatting, extract JSON object boundaries, and parse JSON from raw LLM output."""
+    """Clean markdown wrappers and parse structured JSON. Fails boundedly on malformed text."""
     if not raw_text or not str(raw_text).strip():
         raise ValueError("Raw LLM output is empty.")
+
     cleaned = str(raw_text).strip()
+
+    # Strip markdown code fences if present
     if cleaned.startswith("```json"):
         cleaned = cleaned[7:]
-    if cleaned.startswith("```"):
+    elif cleaned.startswith("```"):
         cleaned = cleaned[3:]
     if cleaned.endswith("```"):
         cleaned = cleaned[:-3]
     cleaned = cleaned.strip()
 
+    # Extract JSON substring between outer braces
     start_idx = cleaned.find("{")
     end_idx = cleaned.rfind("}")
     if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
         cleaned = cleaned[start_idx:end_idx + 1]
 
+    # 1. Direct JSON parsing
     try:
         return json.loads(cleaned)
     except Exception:
-        # Trailing comma cleanup before closing braces/brackets
+        pass
+
+    # 2. Minor safe trailing comma repair
+    try:
         repaired = re.sub(r',\s*([\}\]])', r'\1', cleaned)
         return json.loads(repaired)
+    except Exception as err:
+        raise ValueError(f"Could not parse valid JSON from LLM response: {err}")
 
 
 def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj: Dict[str, Any]) -> Dict[str, Any]:
@@ -1065,11 +1183,33 @@ def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj:
 
         doc_id = item.get("document_id")
         if doc_id and doc_id not in doc_map:
+            doc_id_lower = str(doc_id).lower().strip()
             for k in doc_map.keys():
-                if k == doc_id or k.startswith(f"{doc_id}_") or k.startswith(f"{doc_id}("):
+                k_lower = k.lower()
+                sec_in_k = str(doc_map[k][0].get("section", "")).strip()
+                if (
+                    k_lower == doc_id_lower
+                    or k_lower == f"bns_{doc_id_lower}"
+                    or doc_id_lower == f"bns_{k_lower}"
+                    or k_lower.startswith(f"{doc_id_lower}_")
+                    or k_lower.startswith(f"{doc_id_lower}(")
+                    or (sec_in_k and sec_in_k in doc_id_lower)
+                ):
                     doc_id = k
                     item["document_id"] = k
                     break
+
+        if not doc_id or doc_id not in doc_map:
+            # Fallback section number matching
+            item_sec = str(item.get("section", "")).strip()
+            sec_search = re.search(r'\b\d+\b', str(doc_id or item_sec))
+            if sec_search:
+                target_sec = sec_search.group()
+                for k, (d_info, g_off) in doc_map.items():
+                    if str(d_info.get("section", "")).strip() == target_sec:
+                        doc_id = k
+                        item["document_id"] = k
+                        break
 
         if not doc_id or doc_id not in doc_map:
             limitations.append(
@@ -1192,18 +1332,37 @@ def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj:
                 rel_type = "none"
             rel_analysis["relationship_type"] = rel_type
             rel_analysis["related_candidate"] = str(rel_analysis.get("related_candidate", ""))
-            rel_analysis["reason"] = str(rel_analysis.get("reason", "No relationship action taken."))
+        act_code = doc_info.get("act", "BNS")
+        act_name = doc_info.get("act_name", "Bharatiya Nyaya Sanhita (BNS), 2023")
 
         reasoning_text = item.get("reasoning") or item.get("explanation") or ""
         explanation_text = item.get("explanation") or reasoning_text
 
+        sec_num = str(doc_info.get("section", ""))
+        law_requires = item.get("law_requires") or item.get("core_elements") or [doc_info.get("title", "Statutory requirement")]
+        fir_states = item.get("fir_states") or item.get("satisfied_elements") or ["Facts stated in the FIR."]
+        why_may_apply = item.get("why_may_apply") or reasoning_text or f"The allegations in the FIR correspond to the statutory scope of Section {sec_num}."
+        what_remains_uncertain = item.get("what_remains_uncertain") or miss_elements or ["Further investigation and legal proceedings required."]
+        raw_assessment = str(item.get("assessment") or "").strip()
+        if not raw_assessment or "directly satisfies" in raw_assessment.lower() or "conclusively proves" in raw_assessment.lower() or "establishes guilt" in raw_assessment.lower():
+            assessment = f"The allegations recorded in the FIR make Section {sec_num} relevant for consideration; the FIR itself does not establish guilt."
+        else:
+            assessment = raw_assessment
+
         grounded_item = {
             "offence_type": offence_name,
-            "section": str(doc_info.get("section", "")),
+            "act": act_code,
+            "act_name": act_name,
+            "section": sec_num,
             "clause": doc_info.get("clause", ""),
             "title": doc_info.get("title", ""),
             "unit_type": unit_type,
             "applicability": applicability,
+            "law_requires": law_requires,
+            "fir_states": fir_states,
+            "why_may_apply": why_may_apply,
+            "what_remains_uncertain": what_remains_uncertain,
+            "assessment": assessment,
             "statutory_structure": stat_struct,
             "prerequisite_evidence": prereq_ev,
             "core_elements": core_elements,
@@ -1222,7 +1381,7 @@ def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj:
             "evidence": [
                 {
                     "document_id": doc_id,
-                    "section": str(doc_info.get("section", "")),
+                    "section": sec_num,
                     "clause": doc_info.get("clause", ""),
                     "rank": doc_info.get("rank")
                 }
@@ -1230,11 +1389,28 @@ def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj:
         }
         valid_analysis_items.append(grounded_item)
 
-    return {
+    res_dict = {
         "status": "success",
         "analysis": valid_analysis_items,
         "limitations": limitations
     }
+
+    if parsed_data.get("plain_summary"):
+        res_dict["plain_summary"] = parsed_data["plain_summary"]
+    if parsed_data.get("what_fir_alleges"):
+        res_dict["what_fir_alleges"] = parsed_data["what_fir_alleges"]
+    if parsed_data.get("unestablished_facts"):
+        res_dict["unestablished_facts"] = parsed_data["unestablished_facts"]
+    if parsed_data.get("clarifying_details"):
+        res_dict["clarifying_details"] = parsed_data["clarifying_details"]
+    if parsed_data.get("rights"):
+        res_dict["rights"] = parsed_data["rights"]
+    if parsed_data.get("next_steps"):
+        res_dict["next_steps"] = parsed_data["next_steps"]
+    if parsed_data.get("bottom_line"):
+        res_dict["bottom_line"] = parsed_data["bottom_line"]
+
+    return res_dict
 
 
 

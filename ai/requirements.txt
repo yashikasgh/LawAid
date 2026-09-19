@@ -2,6 +2,7 @@
 chromadb>=0.4.0
 docxtpl>=0.16.0
 cerebras-cloud-sdk>=1.0.0
+google-generativeai>=0.8.0
 groq>=0.11.0
 ollama>=0.1.0
 PyMuPDF>=1.24.0

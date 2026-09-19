@@ -59,6 +59,18 @@ export const firAPI = {
 
   checkDuplicate: (complaintText: string) =>
     api.post('/fir/check-duplicate', { complaint_text: complaintText }),
+
+  saveFIR: (payload: any) =>
+    api.post('/fir/saved', payload),
+
+  getSavedFIRs: () =>
+    api.get('/fir/saved'),
+
+  getSavedFIR: (savedId: number | string) =>
+    api.get(`/fir/saved/${savedId}`),
+
+  deleteSavedFIR: (savedId: number | string) =>
+    api.delete(`/fir/saved/${savedId}`),
 }
 
 // ── BNS Search & Legal Analysis ─────────────────────────────

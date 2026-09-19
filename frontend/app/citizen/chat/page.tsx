@@ -77,12 +77,27 @@ function parseInlineMarkdown(text: string): React.ReactNode[] {
   return parts
 }
 
+function renderStatusBadge(statusText: string) {
+  const cleanStatus = statusText.replace(/\*/g, '').trim()
+  const s = cleanStatus.toLowerCase()
+  if (s.includes('established')) {
+    return <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium px-2 py-0.5 rounded text-xs inline-block">{cleanStatus}</span>
+  } else if (s.includes('potential') || s.includes('material fact') || s.includes('missing')) {
+    return <span className="bg-amber-50 text-amber-700 border border-amber-200 font-medium px-2 py-0.5 rounded text-xs inline-block">{cleanStatus}</span>
+  } else if (s.includes('insufficient') || s.includes('uncertain')) {
+    return <span className="bg-blue-50 text-blue-700 border border-blue-200 font-medium px-2 py-0.5 rounded text-xs inline-block">{cleanStatus}</span>
+  } else {
+    return <span className="bg-slate-100 text-slate-700 border border-slate-200 font-medium px-2 py-0.5 rounded text-xs inline-block">{cleanStatus}</span>
+  }
+}
+
 function RenderMarkdown({ content }: { content: string }) {
   if (!content) return null
 
   const rawLines = content.split('\n')
   const elements: React.ReactNode[] = []
   let currentList: { type: 'ul' | 'ol'; items: React.ReactNode[] } | null = null
+  let currentTable: string[] | null = null
 
   const flushList = (keyPrefix: string) => {
     if (!currentList) return
@@ -110,11 +125,79 @@ function RenderMarkdown({ content }: { content: string }) {
     currentList = null
   }
 
+  const flushTable = (keyPrefix: string) => {
+    if (!currentTable || currentTable.length === 0) return
+    const tableLines = [...currentTable]
+    currentTable = null
+
+    const parsedRows = tableLines
+      .map(line => {
+        const parts = line.split('|').map(cell => cell.trim())
+        if (parts.length >= 3 && parts[0] === '' && parts[parts.length - 1] === '') {
+          return parts.slice(1, -1)
+        }
+        return parts.filter(c => c !== '')
+      })
+      .filter(row => row.length > 0 && !row.every(cell => /^[\-:]+$/.test(cell)))
+
+    if (parsedRows.length === 0) return
+
+    const headerRow = parsedRows[0]
+    const dataRows = parsedRows.slice(1)
+
+    elements.push(
+      <div key={`${keyPrefix}-tbl`} className="my-3 overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
+        <table className="w-full text-left text-xs md:text-sm border-collapse">
+          <thead>
+            <tr className="bg-[#12335B] text-white">
+              {headerRow.map((col, idx) => (
+                <th key={idx} className="px-3 py-2.5 font-semibold tracking-wide border-b border-[#12335B]">
+                  {parseInlineMarkdown(col)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {dataRows.map((row, rIdx) => (
+              <tr key={rIdx} className={rIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
+                {row.map((cell, cIdx) => (
+                  <td key={cIdx} className="px-3 py-2.5 text-slate-800 leading-relaxed align-top break-words">
+                    {cIdx === 0 ? (
+                      <span className="font-bold text-[#12335B]">{parseInlineMarkdown(cell)}</span>
+                    ) : cIdx === row.length - 1 && (row.length === 4 || row.length === 5) ? (
+                      renderStatusBadge(cell)
+                    ) : (
+                      parseInlineMarkdown(cell)
+                    )}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+
   rawLines.forEach((rawLine, idx) => {
     const line = rawLine.trim()
     if (!line) {
       flushList(`flush-${idx}`)
+      flushTable(`tbl-flush-${idx}`)
       return
+    }
+
+    const isTableLine = line.includes('|') && (line.startsWith('|') || line.endsWith('|'))
+
+    if (isTableLine) {
+      flushList(`tbl-b-${idx}`)
+      if (!currentTable) {
+        currentTable = []
+      }
+      currentTable.push(line)
+      return
+    } else {
+      flushTable(`p-tbl-${idx}`)
     }
 
     const bulletMatch = line.match(/^[\-\*•]\s+(.*)/)
@@ -153,6 +236,7 @@ function RenderMarkdown({ content }: { content: string }) {
   })
 
   flushList('final')
+  flushTable('final-tbl')
 
   return <div className="space-y-1.5 text-sm md:text-base text-slate-800">{elements}</div>
 }

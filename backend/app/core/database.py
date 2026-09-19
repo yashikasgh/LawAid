@@ -34,6 +34,7 @@ def _init_engine():
             from app.models.complaint import Complaint # noqa: F401
             from app.models.password_reset import PasswordReset # noqa: F401
             from app.models.chat import ChatSessionModel # noqa: F401
+            from app.models.saved_fir import SavedFIR # noqa: F401
             Base.metadata.create_all(bind=sqlite_engine)
         except Exception:
             pass

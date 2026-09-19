@@ -246,8 +246,9 @@ def run_pipeline(
     top_k_rerank: int = 15,
     analysis_candidate_limit: Optional[int] = None,
     skip_llm_analysis: bool = False,
-    use_deterministic_queries: bool = False,
-    workload: Workload = Workload.CITIZEN_FIR_ANALYSIS
+    use_deterministic_queries: bool = True,
+    workload: Workload = Workload.CITIZEN_FIR_ANALYSIS,
+    target_sections: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
     Executes the end-to-end LawAid RAG Legal Analysis Pipeline.
@@ -262,26 +263,9 @@ def run_pipeline(
         → Analysis Context Window (Top-7 candidates passed to LLM)
         → Context Builder & Legal Analyzer (grounded analysis via LLM)
         → Final Structured Result
-
-    Args:
-        raw_incident (str): Original input incident description text.
-        llm_client (LLMClient, optional): Swappable LLM generation backend instance.
-            If None, resolves to GroqLLMClient() once at the pipeline boundary.
-        top_k_retrieval (int): Number of candidates to retrieve per query from ChromaDB (default 20).
-        top_k_rerank (int): Number of top reranked candidates in candidate pool (default 15).
-        analysis_candidate_limit (int): Maximum candidates passed to LLM analysis context (default 7).
-        skip_llm_analysis (bool): If True, skips LLM analysis generation and returns grounded retrieval fallback cards directly (useful for lightweight workflows e.g. FIR drafting).
-
-    Returns:
-        dict: Structured analysis result containing:
-            - status
-            - sanitized_incident
-            - privacy_metadata (detections, replacement_map)
-            - analysis (grounded legal analysis list)
-            - limitations
-            - disclaimer (non-binding legal advisory statement)
-            - reranked_candidates (full RRF reranked candidate pool)
     """
+    import re
+
     # 1. Resolve LLM client ONCE at the pipeline boundary
     if llm_client is None and not skip_llm_analysis:
         llm_client = MultiProviderLLMFailoverClient()
@@ -294,13 +278,17 @@ def run_pipeline(
     ner_result = extract_entities(sanitized_text)
 
     # 4. Query Generation
-    if use_deterministic_queries:
+    if target_sections:
+        queries = [f"Bharatiya Nyaya Sanhita BNS Section {sec}" for sec in target_sections]
+    elif use_deterministic_queries:
         from ai.rag.retrieval.query_generator import _generate_deterministic_queries
         query_output = _generate_deterministic_queries(ner_result)
+        raw_queries = query_output.get("queries", [])
+        queries = [q["query"] for q in raw_queries if isinstance(q, dict) and "query" in q]
     else:
         query_output = generate_queries(ner_result, llm_client=llm_client if not skip_llm_analysis else None)
-    raw_queries = query_output.get("queries", [])
-    queries = [q["query"] for q in raw_queries if isinstance(q, dict) and "query" in q]
+        raw_queries = query_output.get("queries", [])
+        queries = [q["query"] for q in raw_queries if isinstance(q, dict) and "query" in q]
 
     # Fallback to sanitized raw text if no queries generated
     if not queries and sanitized_text:
@@ -320,6 +308,22 @@ def run_pipeline(
                 all_retrieved_candidates.append(item_copy)
         except Exception:
             continue
+
+    # Filter candidates to targeted FIR sections if explicit target_sections are specified
+    if target_sections:
+        filtered_candidates = []
+        target_nums = set()
+        for ts in target_sections:
+            m = re.match(r'\d+', ts)
+            if m:
+                target_nums.add(m.group())
+        for cand in all_retrieved_candidates:
+            cand_sec = str(cand.get("section", "")).strip()
+            cand_num = re.match(r'\d+', cand_sec)
+            if cand_num and cand_num.group() in target_nums:
+                filtered_candidates.append(cand)
+        if filtered_candidates:
+            all_retrieved_candidates = filtered_candidates
 
     # 6. Section-Level RRF Reranking across candidate pool
     if analysis_candidate_limit is not None:
@@ -386,9 +390,9 @@ def run_pipeline(
         # Parent Section-Level Dynamic Token Budget Candidate Selection
         pack_res = pack_candidates_by_section(
             reranked_candidates=reranked_candidates,
-            base_prompt_tokens=700,
-            min_output_tokens=3500,
-            max_token_budget=6700
+            base_prompt_tokens=1500,
+            min_output_tokens=1800,
+            max_token_budget=5800
         )
         analysis_candidates = pack_res["packed_candidates"]
 
@@ -564,12 +568,7 @@ def run_chat_pipeline(
         workload=Workload.LEGAL_CHAT
     )
 
-    is_fallback = (
-        pipeline_res.get("source") == "retrieval_fallback"
-        or pipeline_res.get("status") == "analysis_unavailable"
-    )
-
-    if is_fallback:
+    if pipeline_res.get("status") == "analysis_unavailable":
         reply_text = (
             "LawAid could not complete the legal analysis right now. Please try again shortly."
         )
@@ -585,12 +584,29 @@ def run_chat_pipeline(
     sanitized_text = pipeline_res.get("sanitized_incident", raw_message)
     limitations = pipeline_res.get("limitations", [])
 
+    # If no analysis items and no reranked candidates were returned, return gentle retry message
+    if not grounded_analysis and not pipeline_res.get("reranked_candidates"):
+        reply_text = (
+            "LawAid could not retrieve relevant statutory provisions right now. Please try rephrasing your query."
+        )
+        return {
+            "status": "ok",
+            "sanitized_incident": sanitized_text,
+            "reply": reply_text,
+            "sections": [],
+            "disclaimer": LEGAL_DISCLAIMER
+        }
+
     # 4. Section-based Deduplication & Grouping
     grouped_sections_map = {}
     for item in grounded_analysis:
         sec = str(item.get("section", "")).strip()
         if not sec:
             continue
+
+        act_code = item.get("act", "BNS")
+        act_full = item.get("act_name", "Bharatiya Nyaya Sanhita (BNS), 2023")
+        sec_key = f"{act_code}_{sec}"
 
         raw_title = str(item.get("title", "")).strip()
         raw_offence = str(item.get("offence_type", "")).strip()
@@ -604,8 +620,10 @@ def run_chat_pipeline(
         applicability = item.get("applicability", "supported")
         reasoning = str(item.get("reasoning", "")).strip()
 
-        if sec not in grouped_sections_map:
-            grouped_sections_map[sec] = {
+        if sec_key not in grouped_sections_map:
+            grouped_sections_map[sec_key] = {
+                "act": act_code,
+                "act_name": act_full,
                 "section": sec,
                 "title": title_clean,
                 "applicability": applicability,
@@ -616,26 +634,28 @@ def run_chat_pipeline(
                 "court": item.get("court")
             }
 
-        curr_app = grouped_sections_map[sec]["applicability"]
+        curr_app = grouped_sections_map[sec_key]["applicability"]
         if applicability == "supported" or (applicability == "uncertain" and curr_app == "not_supported"):
-            grouped_sections_map[sec]["applicability"] = applicability
+            grouped_sections_map[sec_key]["applicability"] = applicability
 
-        if title_clean and title_clean not in grouped_sections_map[sec]["title"]:
-            grouped_sections_map[sec]["title"] += f" / {title_clean}"
+        if title_clean and title_clean not in grouped_sections_map[sec_key]["title"]:
+            grouped_sections_map[sec_key]["title"] += f" / {title_clean}"
 
-        if reasoning and reasoning not in grouped_sections_map[sec]["reasonings"]:
-            grouped_sections_map[sec]["reasonings"].append(reasoning)
+        if reasoning and reasoning not in grouped_sections_map[sec_key]["reasonings"]:
+            grouped_sections_map[sec_key]["reasonings"].append(reasoning)
 
     structured_chat_context = []
     formatted_sections = []
 
-    for sec, sec_info in grouped_sections_map.items():
+    for sec_key, sec_info in grouped_sections_map.items():
+        act_code = sec_info.get("act", "BNS")
+        sec = sec_info["section"]
         clean_title = re.sub(r'[\s\.\,\;]+$', '', sec_info["title"])
         clean_title = re.sub(r'\s*/\s*', ' / ', clean_title)
-        label = f"Section {sec}: {clean_title}"
+        label = f"{act_code} Section {sec}: {clean_title}"
 
         app = sec_info["applicability"]
-        # Relevance Filter (Requirement 3): Skip not_supported downstream candidates
+        # Relevance Filter: Skip not_supported downstream candidates
         if app == "not_supported":
             continue
 
@@ -643,7 +663,9 @@ def run_chat_pipeline(
             formatted_sections.append(label)
 
         structured_chat_context.append({
-            "section": f"Section {sec}",
+            "act": act_code,
+            "act_name": sec_info.get("act_name", ""),
+            "section": f"{act_code} Section {sec}",
             "title": clean_title,
             "overall_applicability": app,
             "statutory_punishment_details": {
@@ -684,7 +706,7 @@ def run_chat_pipeline(
         "    - NOT SUPPORTED: Label as 'Not Supported' when stated facts contradict or fail required statutory elements.\n"
         "    - INSUFFICIENT INFORMATION: Label as 'Insufficient Information' when key facts are unstated so applicability cannot be evaluated.\n"
         "11. GUIDED & INTERACTIVE RESPONSE STRUCTURE & BOTTOM-LINE CONSISTENCY:\n"
-        "    - Structure your answer using clean Markdown headings and bullet points: (1) What the law says about your situation, (2) Applicable sections, (3) Punishments and statutory conditions, (4) What we don't know yet & what details would help, (5) What you can do next (safety advice: 'If you feel that you remain at risk, tell the police about the safety concern and ask what immediate protection or other legal remedy is available in your circumstances'), and (6) Bottom line summary.\n"
+        "    - Structure your answer using clean Markdown headings, tables, and bullet points: (1) What the law says about your situation, (2) Applicable sections (format as a Markdown table with exact columns: Section | Provision | Why it may/may not apply | Status), (3) Punishments and statutory conditions, (4) What we don't know yet & what details would help, (5) What you can do next (safety advice: 'Do not make a ransom payment or agree to demands on your own. Contact the police immediately and follow their guidance while preserving any messages or evidence. Tell the police about any immediate safety risk and ask what protection or other urgent measures are available in your circumstances'), and (6) Bottom line summary.\n"
         "    - BOTTOM-LINE CONSISTENCY RULE: The bottom line summary MUST be generated strictly from the grounded provision states. Any provision that is conditional/uncertain (§309, §134, §331, etc.) MUST remain conditional in the bottom line. ONLY provisions that are fully established by stated facts may be summarized as established.\n"
         "12. RETRIEVAL SYNTHESIS & STATUTORY ACCURACY:\n"
         "    - When multiple retrieved clauses/branches concern the same section, synthesize them into a clear rule. Remove duplication and do not dump every branch into the user response.\n"
@@ -764,7 +786,9 @@ def run_chat_pipeline(
         bot_reply = bot_reply.replace("Bihar National Security", "Bharatiya Nyaya Sanhita")
 
     bot_reply = re.sub(r'\bIPC\b', 'BNS', bot_reply)
-    bot_reply = re.sub(r'Indian Penal Code', 'Bharatiya Nagarik Suraksha Sanhita, 2023', bot_reply, flags=re.IGNORECASE)
+    bot_reply = re.sub(r'Indian Penal Code', 'Bharatiya Nyaya Sanhita, 2023', bot_reply, flags=re.IGNORECASE)
+    bot_reply = re.sub(r'\bCrPC\b', 'BNSS', bot_reply)
+    bot_reply = re.sub(r'Code of Criminal Procedure', 'Bharatiya Nagarik Suraksha Sanhita, 2023', bot_reply, flags=re.IGNORECASE)
 
     bot_reply = sanitize_and_validate_legal_chat_reply(bot_reply, structured_chat_context)
 

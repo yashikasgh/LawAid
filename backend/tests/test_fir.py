@@ -23,6 +23,8 @@ def get_auth_token():
     return login_response.json()["access_token"]
 
 def test_fir_register_requires_auth():
+    client.cookies.clear()
+    client.headers.clear()
     fake_file = io.BytesIO(b"fake pdf content")
     response = client.post(
         "/fir/register",

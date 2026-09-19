@@ -51,7 +51,21 @@ def test_duplicate_check():
     assert "similarity_score" in data
 
 
+def get_police_headers():
+    client.cookies.clear()
+    client.headers.clear()
+    import uuid
+    email = f"police_{uuid.uuid4().hex[:8]}@lawaid.com"
+    client.post("/auth/register", json={"email": email, "password": "password123", "role": "police", "full_name": "Officer Test"})
+    res = client.post("/auth/login", json={"email": email, "password": "password123", "role": "police"})
+    token = res.json()["access_token"]
+    client.cookies.clear()
+    client.headers.clear()
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_police_validate_fir():
+    headers = get_police_headers()
     payload = {
         "district": "Central",
         "policeStation": "PS001",
@@ -60,7 +74,7 @@ def test_police_validate_fir():
         "firContents": "The accused broke the store lock and entered unlawfully during night hours.",
         "section1": "303",
     }
-    res = client.post("/police/validate-fir", json=payload)
+    res = client.post("/police/validate-fir", json=payload, headers=headers)
     assert res.status_code == 200
     data = res.json()
     assert data["valid"] is True
@@ -68,7 +82,10 @@ def test_police_validate_fir():
 
 
 def test_police_approve_fir():
-    res = client.post("/police/approve-fir", json={"fir_draft_id": "FIR/2026/00099", "officer_name": "Inspector Sharma"})
+    import uuid
+    headers = get_police_headers()
+    unique_draft_id = f"FIR/2026/{uuid.uuid4().hex[:5].upper()}"
+    res = client.post("/police/approve-fir", json={"fir_draft_id": unique_draft_id, "officer_name": "Inspector Sharma"}, headers=headers)
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "APPROVED"
@@ -76,7 +93,8 @@ def test_police_approve_fir():
 
 
 def test_legal_chat():
-    res = client.post("/chat/message", json={"message": "What is the punishment for cheating under BNS?"})
+    headers = get_police_headers()
+    res = client.post("/chat/message", json={"message": "What is the punishment for cheating under BNS?"}, headers=headers)
     if res.status_code == 500:
         pytest.skip("AI pipeline not configured, skipping test.")
     assert res.status_code == 200
@@ -89,11 +107,12 @@ def test_legal_chat():
 
 
 def test_police_extract_statement():
+    headers = get_police_headers()
     statement_text = (
         "On 8 September 2026 at approximately 7:30 PM, the complainant was returning home near the main road "
         "when an unknown man punched him in the face and took his mobile phone without consent before escaping on a motorcycle."
     )
-    res = client.post("/police/extract-statement", json={"statement": statement_text})
+    res = client.post("/police/extract-statement", json={"statement": statement_text}, headers=headers)
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "ok"

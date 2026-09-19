@@ -26,12 +26,14 @@ try:
     from ai.rag.pipeline import run_pipeline as _run_pipeline  # type: ignore
     _PIPELINE_AVAILABLE = True
 except Exception:
+    _run_pipeline = None
     _PIPELINE_AVAILABLE = False
 
 try:
     from ai.rag.retrieval.retrieve_bns import retrieve as _retrieve_bns  # type: ignore
     _RAG_AVAILABLE = True
 except Exception:
+    _retrieve_bns = None
     _RAG_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
@@ -201,28 +203,57 @@ import re
 
 def detect_bns_sections(text: str) -> list:
     """
-    Detects BNS/IPC section references from OCR-extracted or document text.
+    Detects BNS/IPC section references from OCR-extracted or document text generically.
     Handles common formats:
-        Section 103, Section 103(a), Sec. 103, s. 103
-        u/s 103 BNS, U/S 115 BNS, Under Section 103
-        103 BNS, BNS 103
+        Section 281, Sec. 281, Sec 281, Sections 281/285
+        u/s 281 BNS, U/S 281/285, U/s 281, Under Section 281
+        281 BNS, BNS 281, 281 IPC, IPC 281
     Returns a sorted deduplicated list of section number strings.
     """
-    patterns = [
-        r'\bsec(?:tion)?\.?\s*(\d+(?:\([a-zA-Z0-9]+\))?)',   # Section 103, Sec. 103
-        r'\bu[/\\]s\s*(\d+(?:\([a-zA-Z0-9]+\))?)',            # u/s 103
-        r'\bunder\s+section\s+(\d+(?:\([a-zA-Z0-9]+\))?)',    # Under Section 103
-        r'\bBNS\s+(\d+(?:\([a-zA-Z0-9]+\))?)',                # BNS 103
-        r'\b(\d+(?:\([a-zA-Z0-9]+\)?)?)\s+BNS\b',            # 103 BNS
-        r'\bIPC\s+(\d+(?:\([a-zA-Z0-9]+\))?)',               # IPC 302 (legacy references)
-    ]
+    if not text:
+        return []
     found = set()
-    for pattern in patterns:
-        for match in re.finditer(pattern, text, re.IGNORECASE):
-            sec = match.group(1).strip()
-            if sec and 1 <= int(re.match(r'\d+', sec).group()) <= 359:  # BNS has sections 1-358
-                found.add(sec)
-    return sorted(found, key=lambda x: int(re.match(r'\d+', x).group()))
+
+    # 1. Matches like "Sections 281/285", "Sec. 281/285", "U/S 281/285", "u/s 281, 285", "Section 281"
+    prefix_pattern = r'(?:\bsec(?:tion)?s?\.?|\bu[/\\]?s\.?|\bunder\s+sections?)\s*([0-9\(\)a-zA-Z\s/,]+)'
+    for m in re.finditer(prefix_pattern, text, re.IGNORECASE):
+        chunk = m.group(1)
+        sec_matches = re.findall(r'\b(\d+(?:\([a-zA-Z0-9]+\))?)\b', chunk[:40])
+        for sec in sec_matches:
+            match_num = re.match(r'\d+', sec)
+            if match_num:
+                num = int(match_num.group())
+                if 1 <= num <= 359:
+                    found.add(sec)
+
+    # 2. Matches like "281 BNS", "281/285 BNS", "BNS 281", "BNS 281/285", "281 IPC", "IPC 281"
+    bns_pattern1 = r'\b(?:BNS|IPC)\s*([0-9\(\)a-zA-Z\s/,]+)'
+    for m in re.finditer(bns_pattern1, text, re.IGNORECASE):
+        chunk = m.group(1)
+        sec_matches = re.findall(r'\b(\d+(?:\([a-zA-Z0-9]+\))?)\b', chunk[:40])
+        for sec in sec_matches:
+            match_num = re.match(r'\d+', sec)
+            if match_num:
+                num = int(match_num.group())
+                if 1 <= num <= 359:
+                    found.add(sec)
+
+    bns_pattern2 = r'([0-9\(\)a-zA-Z\s/,]+)\s*(?:BNS|IPC)\b'
+    for m in re.finditer(bns_pattern2, text, re.IGNORECASE):
+        chunk = m.group(1)
+        sec_matches = re.findall(r'\b(\d+(?:\([a-zA-Z0-9]+\))?)\b', chunk[-40:])
+        for sec in sec_matches:
+            match_num = re.match(r'\d+', sec)
+            if match_num:
+                num = int(match_num.group())
+                if 1 <= num <= 359:
+                    found.add(sec)
+
+    def _sec_key(val: str) -> int:
+        m = re.match(r'\d+', val)
+        return int(m.group()) if m else 0
+
+    return sorted(list(found), key=_sec_key)
 
 
 # ── Helper for OCR Extraction ────────────────────────────────────────────────
@@ -232,19 +263,27 @@ def _extract_text_with_ocr(contents: bytes, filename: str, content_type: str) ->
     content_type_lower = (content_type or "").lower()
 
     is_pdf = content_type_lower == "application/pdf" or filename_lower.endswith(".pdf")
-    is_image = content_type_lower in ["image/jpeg", "image/png", "image/jpg"] or any(
-        filename_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png"]
+    is_txt = content_type_lower in ["text/plain"] or filename_lower.endswith(".txt")
+    is_image = (
+        content_type_lower.startswith("image/")
+        or any(filename_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"])
     )
 
-    if not is_pdf and not is_image:
+    if not is_pdf and not is_txt and not is_image:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file format. Please upload a PDF document or JPG/PNG image."
+            detail="This file type can be uploaded, but LawAid cannot currently extract FIR content from this format. Please upload a PDF document, TXT file, or clear FIR image (JPG, PNG, WEBP, BMP)."
         )
 
     extracted_text = ""
 
-    if is_pdf:
+    if is_txt:
+        try:
+            extracted_text = contents.decode("utf-8", errors="ignore").strip()
+        except Exception:
+            extracted_text = ""
+
+    elif is_pdf:
         # 1. Native PDF text extraction with PyMuPDF
         try:
             import pymupdf
@@ -291,7 +330,7 @@ def _extract_text_with_ocr(contents: bytes, filename: str, content_type: str) ->
 @router.post("/understand")
 async def understand_fir(file: UploadFile = File(...)):
     """
-    Accepts an uploaded FIR (PDF or image).
+    Accepts an uploaded FIR (PDF, TXT, or image).
     Extracts text using PyMuPDF and/or RapidOCR, processes legal analysis via existing AI RAG pipeline,
     and returns plain-language summary, charges, entities, citizen rights, and next steps.
     """
@@ -306,46 +345,52 @@ async def understand_fir(file: UploadFile = File(...)):
     content_type_lower = (file.content_type or "").lower()
 
     is_pdf = content_type_lower == "application/pdf" or filename_lower.endswith(".pdf")
-    is_image = content_type_lower in ["image/jpeg", "image/png", "image/jpg"] or any(
-        filename_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png"]
+    is_txt = content_type_lower in ["text/plain"] or filename_lower.endswith(".txt")
+    is_image = (
+        content_type_lower.startswith("image/")
+        or any(filename_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"])
     )
 
-    if not is_pdf and not is_image:
+    if not is_pdf and not is_txt and not is_image:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file format. Please upload a PDF document or JPG/PNG image."
+            detail="This file type can be uploaded, but LawAid cannot currently extract FIR content from this format. Please upload a PDF document, TXT file, or clear FIR image (JPG, PNG, WEBP, BMP)."
         )
 
-    # 1. Store in GridFS (reports storage status honestly — does not fake a file ID)
-    from app.core.mongo import mongo_available, fs as _mongo_fs
+    # Temporary analysis processing — do NOT store file in GridFS automatically before user consent
     file_id = None
     file_stored = False
-    if mongo_available and _mongo_fs is not None:
-        try:
-            file_id = str(_mongo_fs.put(contents, filename=file.filename, content_type=file.content_type))
-            file_stored = True
-        except Exception as store_err:
-            file_id = None
-            file_stored = False
-    # Note: file_stored=False is reported in response but does NOT block analysis
 
-    # 2. Text extraction & OCR
+    # 2. Text extraction, OCR cleaning, and metadata extraction
+    from ai.rag.parser.clean_ocr import clean_ocr_text, extract_fir_metadata
     extracted_text = _extract_text_with_ocr(contents, file.filename, file.content_type)
-    detected_sections = detect_bns_sections(extracted_text) if extracted_text else []
+    cleaned_text = clean_ocr_text(extracted_text)
+    ocr_meta = extract_fir_metadata(cleaned_text)
+    detected_sections = detect_bns_sections(cleaned_text) if cleaned_text else []
 
-
-    if not extracted_text or len(extracted_text.strip()) < 15:
+    if not cleaned_text or len(cleaned_text.strip()) < 15:
         raise HTTPException(
             status_code=400,
             detail="Could not extract readable text from the uploaded document or image. Please ensure the FIR copy or photo is clear and legible."
         )
 
-    # 3. AI Pipeline Analysis (limit input text to 2500 chars)
+    # 3. AI Pipeline Analysis
     if not _PIPELINE_AVAILABLE:
         raise HTTPException(status_code=500, detail="AI Pipeline module not found or unavailable.")
 
+    has_sections_in_fir = bool(detected_sections)
+    sections_recorded_in_fir = detected_sections if has_sections_in_fir else []
+
     try:
-        ai_res = _run_pipeline(raw_incident=extracted_text[:2500])
+        if has_sections_in_fir:
+            ai_res = _run_pipeline(
+                raw_incident=cleaned_text[:2500],
+                target_sections=sections_recorded_in_fir
+            )
+        else:
+            ai_res = _run_pipeline(
+                raw_incident=cleaned_text[:2500]
+            )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI Legal Analysis failed: {str(e)}")
 
@@ -355,8 +400,15 @@ async def understand_fir(file: UploadFile = File(...)):
 
     for item in ai_res.get("analysis", []):
         app_status = item.get("applicability", "supported" if item.get("status") == "Supported" else "uncertain")
+        sec_str = str(item.get("section", ""))
+        law_req = item.get("law_requires") or item.get("core_elements") or [item.get("title", "Statutory requirement")]
+        fir_st = item.get("fir_states") or item.get("satisfied_elements") or ["Facts stated in the FIR."]
+        why_apply = item.get("why_may_apply") or item.get("reasoning") or f"The allegations in the FIR correspond to the statutory scope of Section {sec_str}."
+        what_uncert = item.get("what_remains_uncertain") or item.get("missing_elements") or ["Further investigation and legal proceedings required."]
+        assess = item.get("assessment") or f"The allegations recorded in the FIR make Section {sec_str} relevant for consideration; the FIR itself does not establish guilt."
+
         entry = {
-            "section": str(item.get("section", "")),
+            "section": sec_str,
             "clause": item.get("clause", ""),
             "title": item.get("title", ""),
             "punishment": item.get("punishment", ""),
@@ -366,6 +418,11 @@ async def understand_fir(file: UploadFile = File(...)):
             "reasoning": item.get("reasoning", ""),
             "applicability": app_status,
             "status": item.get("status", ""),
+            "law_requires": law_req,
+            "fir_states": fir_st,
+            "why_may_apply": why_apply,
+            "what_remains_uncertain": what_uncert,
+            "assessment": assess,
         }
         full_analysis.append(entry)
 
@@ -384,44 +441,161 @@ async def understand_fir(file: UploadFile = File(...)):
                 deduped.append(c)
         return deduped
 
-    display_charges = _dedupe_charges(charges_supported)
+    display_charges = _dedupe_charges(charges_supported or full_analysis)
+
+    if has_sections_in_fir:
+        explained_sections = display_charges
+        potential_sections = []
+    else:
+        explained_sections = []
+        potential_sections = display_charges
+
+    # Build clean formatted fact summary lines from extracted metadata
+    meta_summary_lines = []
+    if ocr_meta.get("fir_number") != "Not stated in the FIR":
+        meta_summary_lines.append(f"• FIR No.: {ocr_meta['fir_number']}")
+    if ocr_meta.get("police_station") != "Not stated in the FIR":
+        meta_summary_lines.append(f"• Police Station: {ocr_meta['police_station']}")
+    if ocr_meta.get("district") != "Not stated in the FIR":
+        meta_summary_lines.append(f"• District: {ocr_meta['district']}")
+    if ocr_meta.get("date_time_of_occurrence") != "Not stated in the FIR":
+        meta_summary_lines.append(f"• Date/Time of Occurrence: {ocr_meta['date_time_of_occurrence']}")
+    if ocr_meta.get("place_of_occurrence") != "Not stated in the FIR":
+        meta_summary_lines.append(f"• Place of Occurrence: {ocr_meta['place_of_occurrence']}")
+    if ocr_meta.get("informant") != "Not stated in the FIR":
+        meta_summary_lines.append(f"• Informant: {ocr_meta['informant']}")
+
     is_fallback = (ai_res.get("source") == "retrieval_fallback" or ai_res.get("pipeline_source") == "retrieval_fallback")
 
+    disclaimer_note = "\n\nThese are allegations/facts recorded in the FIR. They are not, by themselves, a final determination that an offence has been proved."
+
+    # Build clean factual narrative snippet from cleaned_text (excluding header lines)
+    narrative_lines = []
+    for line in cleaned_text.splitlines():
+        line_s = line.strip()
+        if len(line_s) > 25 and not any(line_s.lower().startswith(h) for h in ["fir no", "police station", "district", "date", "informant", "place of occurrence", "information report", "occurrence"]):
+            narrative_lines.append(line_s)
+        if len(narrative_lines) >= 3:
+            break
+
+    narrative_snippet = " ".join(narrative_lines) if narrative_lines else cleaned_text[:350]
+
     if is_fallback:
+        explained_sections = []
+        potential_sections = []
         display_charges = []
+        # Return all retrieved candidate provisions for reference without arbitrary cap
         reference_provisions = _dedupe_charges(full_analysis or charges_uncertain)
         plain_summary = (
-            "Official police complaint document recorded. Automated legal reasoning is currently unavailable. "
-            "Relevant statutory provisions retrieved from the BNS corpus are provided below for reference.\n\n"
-            "Key facts stated in FIR:\n"
-            + (extracted_text[:400] + ("..." if len(extracted_text) > 400 else ""))
+            "Official police complaint document recorded. Automated legal reasoning is currently in degraded fallback mode. "
+            "Relevant statutory provisions retrieved from the BNS legal corpus are provided below for reference only and do NOT represent established legal findings.\n\n"
+            "Key Facts Stated in FIR:\n"
+            + (narrative_snippet or ("\n".join(meta_summary_lines) if meta_summary_lines else cleaned_text[:350]))
+            + disclaimer_note
         )
     else:
-        if not display_charges and charges_uncertain:
-            display_charges = _dedupe_charges(charges_uncertain)
         reference_provisions = []
-        active_titles = [c["title"] for c in display_charges if c.get("title")]
-        plain_summary = (
-            f"Official police complaint document recorded. The allegations involve "
-            f"{', '.join(active_titles) or 'cognizable offences'}.\n\n"
-            f"Key facts stated in FIR:\n"
-            + (extracted_text[:400] + ("..." if len(extracted_text) > 400 else ""))
+        summary_base = ai_res.get("plain_summary") or ai_res.get("summary")
+        if summary_base and len(summary_base.strip()) > 30 and "allegations relating to" not in summary_base.lower():
+            plain_summary = summary_base.strip()
+            if "These are allegations/facts recorded in the FIR" not in plain_summary:
+                plain_summary += disclaimer_note
+        else:
+            plain_summary = (
+                f"The uploaded FIR records allegations filed with law enforcement.\n\n"
+                f"Summary of stated facts:\n"
+                f"{narrative_snippet}\n"
+                + disclaimer_note
+            )
+
+    what_alleges = ai_res.get("what_fir_alleges")
+    if not what_alleges or len(what_alleges.strip()) < 20 or "the place of occurrence" in what_alleges.lower() or "'s details" in what_alleges.lower():
+        factual_clause_parts = []
+        if ocr_meta.get("informant") != "Not stated in the FIR":
+            factual_clause_parts.append(f"by informant {ocr_meta['informant']}")
+        if ocr_meta.get("place_of_occurrence") != "Not stated in the FIR":
+            factual_clause_parts.append(f"at {ocr_meta['place_of_occurrence']}")
+        if ocr_meta.get("date_time_of_occurrence") != "Not stated in the FIR":
+            factual_clause_parts.append(f"on or about {ocr_meta['date_time_of_occurrence']}")
+
+        clause_str = (" " + ", ".join(factual_clause_parts)) if factual_clause_parts else ""
+        what_alleges = (
+            f"According to the FIR recorded{clause_str}, the report alleges: {narrative_snippet}. "
+            "These statements represent claims filed with law enforcement for official investigation."
         )
 
-    rights = [
-        "Right to a free copy of the First Information Report (FIR) immediately under Section 173 BNSS.",
-        "Right to know the full grounds of arrest and whether offences are bailable or non-bailable.",
-        "Right to consult and be defended by a legal practitioner of your choice (Article 22(1) of the Constitution).",
-        "Right to free legal assistance if unable to afford counsel (NALSA / Legal Services Authority).",
-        "Protection against unlawful detention beyond 24 hours without production before a Magistrate (Section 58 BNSS).",
+    # Dynamic case-relevant fallbacks for unestablished facts and clarifying details
+    offence_titles_lower = " ".join([c.get("title", "").lower() for c in display_charges])
+    
+    if "driving" in offence_titles_lower or "riding" in offence_titles_lower or "road" in cleaned_text.lower() or "accident" in cleaned_text.lower():
+        default_unestablished = [
+            "Whether the vehicle was operated in a rash or negligent manner at excessive speed.",
+            "Whether mechanical failure or road conditions contributed to the incident.",
+            "Medical findings and formal injury certificates of involved parties."
+        ]
+        default_clarifying = [
+            "Are there eyewitness statements or CCTV recordings of the vehicle's movement?",
+            "Was a formal motor vehicle inspector's technical report prepared?"
+        ]
+    elif "theft" in offence_titles_lower or "stolen" in cleaned_text.lower():
+        default_unestablished = [
+            "Whether the property was taken without consent with dishonest intent.",
+            "Ownership documentation and valuation proof of the reported property.",
+            "Recovery status of the reported item."
+        ]
+        default_clarifying = [
+            "Was the property in the personal custody of the victim or in a public location?",
+            "What was the estimated valuation of the item?"
+        ]
+    elif "hurt" in offence_titles_lower or "assault" in offence_titles_lower or "injury" in cleaned_text.lower():
+        default_unestablished = [
+            "Nature, classification, and medical severity of physical injuries.",
+            "Whether dangerous weapons or means were used during the alleged conduct."
+        ]
+        default_clarifying = [
+            "Is a Medico-Legal Certificate (MLC) or hospital record available?",
+            "Were any weapons or dangerous instruments alleged to be used?"
+        ]
+    else:
+        default_unestablished = [
+            "Whether the allegations stated in the FIR are ultimately proved through investigation.",
+            "Whether the accused possessed the required statutory criminal intent or knowledge.",
+            "Witness statements and formal evidentiary findings."
+        ]
+        default_clarifying = [
+            "Are there medical reports, receipts, digital evidence, or CCTV recordings supporting the timeline?",
+            "Were there independent witnesses present at the scene?"
+        ]
+
+    unestablished = ai_res.get("unestablished_facts") or default_unestablished
+    clarifying = ai_res.get("clarifying_details") or default_clarifying
+
+    rights = ai_res.get("rights") or [
+        "Under Section 173(2) BNSS, right to receive a free copy of the First Information Report (FIR) immediately.",
+        "Under Article 22(1) of the Constitution and Section 47 BNSS, right to consult and be defended by legal counsel of choice.",
+        "Under Article 22(2) of the Constitution and Section 57 BNSS, right not to be detained in police custody beyond 24 hours without production before a Magistrate.",
+        "Under Article 39A of the Constitution, right to free legal aid through the Legal Services Authority if unable to afford counsel."
     ]
 
-    next_steps = [
-        "Carefully verify all allegations, dates, times, and witness names mentioned in the FIR.",
-        "If offences are marked Non-Bailable, consult an advocate immediately to file for Anticipatory Bail under Section 482 BNSS.",
-        "Contact the District Legal Services Authority (DLSA) or call Helpline 15100 for free assistance.",
-        "Keep multiple physical copies and preserve timestamped digital evidence (calls, receipts, CCTV footage).",
+    next_steps = ai_res.get("next_steps") or [
+        "Preserve physical and digital copies of the FIR document.",
+        "Verify dates, times, vehicle numbers, and witness details mentioned in the report.",
+        "Obtain and preserve medical reports, receipts, digital evidence, or CCTV footage where applicable.",
+        "Identify witnesses mentioned in the FIR and seek legal assistance based on your role (informant/victim/accused)."
     ]
+
+    if has_sections_in_fir:
+        bottom_line_val = ai_res.get("bottom_line") or (
+            f"This FIR explicitly states allegations under Section {', '.join(sections_recorded_in_fir)}. "
+            "These provisions are relevant for legal consideration; the FIR itself does not establish guilt."
+        )
+    else:
+        active_secs = [c["section"] for c in display_charges if c.get("section")]
+        sec_label = f"Section {', '.join(active_secs)}" if active_secs else "the relevant BNS provisions"
+        bottom_line_val = ai_res.get("bottom_line") or (
+            f"Based on the facts recorded in this FIR, {sec_label} appears potentially relevant for consideration. "
+            "The FIR itself does not explicitly record an offence section number, nor does it establish that the offence has been proved."
+        )
 
     disclaimer_text = ai_res.get(
         "disclaimer",
@@ -429,22 +603,232 @@ async def understand_fir(file: UploadFile = File(...)):
     )
 
     return {
-        "status": "ok",
+        "status": "ok" if not is_fallback else "degraded_fallback",
+        "is_degraded_fallback": is_fallback,
         "file_id": file_id,
         "file_stored": file_stored,
         "filename": file.filename,
-        "extracted_text": extracted_text[:1200],
-        "detected_sections": detected_sections,  # BNS sections found in document text
+        "extracted_text": cleaned_text[:1200],
+        "ocr_metadata": ocr_meta,
+        "sections_recorded_in_fir": sections_recorded_in_fir,
+        "has_sections_in_fir": has_sections_in_fir,
+        "explained_sections": explained_sections,
+        "potential_sections": potential_sections,
+        "charges": display_charges,
+        "detected_sections": sections_recorded_in_fir,
         "entities": ai_res.get("privacy_metadata", {}).get("detections", []),
         "summary": plain_summary,
-        "charges": display_charges,
+        "what_fir_alleges": what_alleges,
         "reference_provisions": reference_provisions,
         "uncertain_provisions": charges_uncertain if not is_fallback else [],
         "analysis": full_analysis,
+        "unestablished_facts": unestablished,
+        "clarifying_details": clarifying,
         "rights": rights,
         "next_steps": next_steps,
+        "bottom_line": bottom_line_val,
         "disclaimer": disclaimer_text,
     }
+
+
+# ── Saved FIRs (Citizen Opt-In Persistence) ───────────────────────────────────
+
+import json
+from app.models.saved_fir import SavedFIR
+
+
+from typing import Optional, List, Any
+
+class SaveFIRRequest(BaseModel):
+    filename: str = "fir_document.pdf"
+    file_type: Optional[str] = "application/pdf"
+    file_size: Optional[int] = 0
+    file_id: Optional[str] = None        # optional existing GridFS file ID
+    file_base64: Optional[str] = None    # optional base64 encoded file for GridFS storage on explicit user consent
+    extracted_text: Optional[str] = ""
+    summary: Optional[str] = "FIR Analysis"
+    charges: Optional[List[Any]] = []
+    reference_provisions: Optional[List[Any]] = []
+    rights: Optional[List[Any]] = []
+    next_steps: Optional[List[Any]] = []
+    disclaimer: Optional[str] = ""
+
+
+@router.post("/saved")
+def save_fir_analysis(
+    body: SaveFIRRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Persists an analyzed FIR to the citizen's account after explicit user consent.
+    If file_base64 is provided, stores the document binary in GridFS as part of the consent flow.
+    """
+    gridfs_id = body.file_id
+    if not gridfs_id and body.file_base64:
+        from app.core.mongo import mongo_available, fs as _mongo_fs
+        if mongo_available and _mongo_fs is not None:
+            try:
+                import base64
+                file_bytes = base64.b64decode(body.file_base64)
+                # Sanitize filename before storing in GridFS
+                safe_filename = Path(body.filename).name if body.filename else "fir_document.pdf"
+                gridfs_id = str(_mongo_fs.put(
+                    file_bytes,
+                    filename=safe_filename,
+                    content_type=body.file_type or "application/pdf"
+                ))
+            except Exception:
+                gridfs_id = None
+
+    saved_record = SavedFIR(
+        user_id=current_user.id,
+        filename=Path(body.filename).name if body.filename else "fir_document",
+        file_type=body.file_type,
+        file_size=body.file_size,
+        gridfs_file_id=gridfs_id,
+        extracted_text=body.extracted_text,
+        summary=body.summary,
+        charges=json.dumps(body.charges),
+        reference_provisions=json.dumps(body.reference_provisions),
+        rights=json.dumps(body.rights),
+        next_steps=json.dumps(body.next_steps),
+        disclaimer=body.disclaimer
+    )
+    db.add(saved_record)
+    db.commit()
+    db.refresh(saved_record)
+    return {
+        "status": "saved",
+        "saved_id": saved_record.id,
+        "filename": saved_record.filename,
+        "gridfs_file_id": gridfs_id,
+        "created_at": saved_record.created_at
+    }
+
+
+@router.get("/saved")
+def get_saved_firs(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Retrieves all saved FIR analyses belonging to the authenticated user.
+    """
+    records = (
+        db.query(SavedFIR)
+        .filter(SavedFIR.user_id == current_user.id)
+        .order_by(SavedFIR.created_at.desc())
+        .all()
+    )
+    result = []
+    for r in records:
+        r_dict = {
+            "id": r.id,
+            "filename": r.filename,
+            "file_type": r.file_type,
+            "file_size": r.file_size,
+            "gridfs_file_id": r.gridfs_file_id,
+            "summary": r.summary,
+            "created_at": r.created_at,
+            "updated_at": r.updated_at,
+        }
+        try:
+            r_dict["charges"] = json.loads(r.charges) if r.charges else []
+        except Exception:
+            r_dict["charges"] = []
+        try:
+            r_dict["reference_provisions"] = json.loads(r.reference_provisions) if r.reference_provisions else []
+        except Exception:
+            r_dict["reference_provisions"] = []
+        try:
+            r_dict["rights"] = json.loads(r.rights) if r.rights else []
+        except Exception:
+            r_dict["rights"] = []
+        try:
+            r_dict["next_steps"] = json.loads(r.next_steps) if r.next_steps else []
+        except Exception:
+            r_dict["next_steps"] = []
+        result.append(r_dict)
+    return result
+
+
+@router.get("/saved/{saved_id}")
+def get_saved_fir_detail(
+    saved_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Retrieves a single saved FIR analysis belonging to the authenticated user.
+    """
+    record = db.query(SavedFIR).filter(SavedFIR.id == saved_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Saved FIR not found.")
+    if record.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this saved FIR.")
+
+    r_dict = {
+        "id": record.id,
+        "filename": record.filename,
+        "file_type": record.file_type,
+        "file_size": record.file_size,
+        "gridfs_file_id": record.gridfs_file_id,
+        "extracted_text": record.extracted_text,
+        "summary": record.summary,
+        "disclaimer": record.disclaimer,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }
+    try:
+        r_dict["charges"] = json.loads(record.charges) if record.charges else []
+    except Exception:
+        r_dict["charges"] = []
+    try:
+        r_dict["reference_provisions"] = json.loads(record.reference_provisions) if record.reference_provisions else []
+    except Exception:
+        r_dict["reference_provisions"] = []
+    try:
+        r_dict["rights"] = json.loads(record.rights) if record.rights else []
+    except Exception:
+        r_dict["rights"] = []
+    try:
+        r_dict["next_steps"] = json.loads(record.next_steps) if record.next_steps else []
+    except Exception:
+        r_dict["next_steps"] = []
+
+    return r_dict
+
+
+@router.delete("/saved/{saved_id}")
+def delete_saved_fir(
+    saved_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Deletes a saved FIR record, analysis, and GridFS stored document from active application storage.
+    Enforces server-side ownership.
+    """
+    record = db.query(SavedFIR).filter(SavedFIR.id == saved_id).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Saved FIR not found.")
+    if record.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this saved FIR.")
+
+    # Remove associated GridFS stored document if present
+    if record.gridfs_file_id:
+        from app.core.mongo import mongo_available, fs as _mongo_fs
+        if mongo_available and _mongo_fs is not None:
+            try:
+                from bson import ObjectId
+                _mongo_fs.delete(ObjectId(record.gridfs_file_id))
+            except Exception:
+                pass
+
+    db.delete(record)
+    db.commit()
+    return {"status": "deleted", "saved_id": saved_id}
 
 
 class FIRGenerateRequest(BaseModel):

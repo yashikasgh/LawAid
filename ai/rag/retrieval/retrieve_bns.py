@@ -84,6 +84,8 @@ def retrieve(query: str, top_k: int = TOP_K, db_path: str = DB_PATH, collection_
         item_dict.update({
             "rank": idx + 1,
             "id": ids[idx],
+            "act": meta.get("act", "BNS"),
+            "act_name": meta.get("act_name", "Bharatiya Nyaya Sanhita (BNS), 2023"),
             "section": meta.get("section", ""),
             "clause": meta.get("clause", ""),
             "title": meta.get("title", ""),

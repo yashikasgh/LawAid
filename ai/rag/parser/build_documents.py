@@ -13,6 +13,7 @@ from pathlib import Path
 # Base paths
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENRICHED_JSON_PATH = BASE_DIR / "data" / "processed" / "bns_sections_enriched.json"
+BNSS_JSON_PATH = BASE_DIR / "data" / "processed" / "bnss_sections.json"
 DOCUMENTS_JSON_PATH = BASE_DIR / "data" / "processed" / "documents.json"
 
 def clean_lines(field_value):
@@ -37,6 +38,7 @@ def build_documents():
     documents = []
     generated_ids = set()
 
+    # 1. Process BNS sections
     for sec in sections:
         sec_num = sec["number"]
         sec_id = sec["section_id"]
@@ -100,6 +102,8 @@ def build_documents():
                 "text": emb_text.strip(),
                 "metadata": {
                     "id": doc_id,
+                    "act": "BNS",
+                    "act_name": "Bharatiya Nyaya Sanhita (BNS), 2023",
                     "section": sec_num,
                     "clause": "",
                     "title": title,
@@ -160,6 +164,8 @@ def build_documents():
                     "text": emb_text.strip(),
                     "metadata": {
                         "id": doc_id,
+                        "act": "BNS",
+                        "act_name": "Bharatiya Nyaya Sanhita (BNS), 2023",
                         "section": sec_num,
                         "clause": display_clause,
                         "title": title,
@@ -170,6 +176,30 @@ def build_documents():
                 }
                 documents.append(doc)
                 generated_ids.add(doc_id)
+
+    # 2. Process BNSS sections if available
+    if BNSS_JSON_PATH.exists():
+        with open(BNSS_JSON_PATH, "r", encoding="utf-8") as f:
+            bnss_sections = json.load(f)
+        for sec in bnss_sections:
+            doc_id = sec["section_id"]
+            doc = {
+                "id": doc_id,
+                "text": sec["text"].strip(),
+                "metadata": {
+                    "id": doc_id,
+                    "act": sec.get("act", "BNSS"),
+                    "act_name": sec.get("act_name", "Bharatiya Nagarik Suraksha Sanhita (BNSS), 2023"),
+                    "section": sec["number"],
+                    "clause": "",
+                    "title": sec["title"],
+                    "chapter": sec["chapter"],
+                    "bailable": "",
+                    "cognizable": ""
+                }
+            }
+            documents.append(doc)
+            generated_ids.add(doc_id)
 
     # Save to documents.json
     DOCUMENTS_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -187,7 +217,7 @@ class TestDocumentBuilder(unittest.TestCase):
             self.docs = json.load(f)
 
     def test_section_55(self):
-        sec_docs = [d for d in self.docs if d["metadata"]["section"] == 55]
+        sec_docs = [d for d in self.docs if d["metadata"]["section"] == 55 and d["metadata"].get("act") == "BNS"]
         self.assertEqual(len(sec_docs), 2)
         self.assertIn("Whoever abets the \ncommission of an offence", sec_docs[0]["text"])
         self.assertIn("Whoever abets the \ncommission of an offence", sec_docs[1]["text"])
@@ -197,7 +227,7 @@ class TestDocumentBuilder(unittest.TestCase):
         self.assertEqual(sec_docs[1]["metadata"]["clause"], "55-2")
 
     def test_section_58(self):
-        sec_docs = [d for d in self.docs if d["metadata"]["section"] == 58]
+        sec_docs = [d for d in self.docs if d["metadata"]["section"] == 58 and d["metadata"].get("act") == "BNS"]
         self.assertEqual(len(sec_docs), 2)
         self.assertEqual(sec_docs[0]["metadata"]["clause"], "58(a)")
         self.assertEqual(sec_docs[1]["metadata"]["clause"], "58(b)")
@@ -207,32 +237,32 @@ class TestDocumentBuilder(unittest.TestCase):
         self.assertEqual(sec_docs[1]["metadata"]["bailable"], "Bailable.")
 
     def test_section_64(self):
-        sec_docs = [d for d in self.docs if d["metadata"]["section"] == 64]
+        sec_docs = [d for d in self.docs if d["metadata"]["section"] == 64 and d["metadata"].get("act") == "BNS"]
         self.assertEqual(len(sec_docs), 2)
         self.assertEqual(sec_docs[0]["metadata"]["clause"], "64(1)")
         self.assertEqual(sec_docs[1]["metadata"]["clause"], "64(2)")
 
     def test_section_103(self):
-        sec_docs = [d for d in self.docs if d["metadata"]["section"] == 103]
+        sec_docs = [d for d in self.docs if d["metadata"]["section"] == 103 and d["metadata"].get("act") == "BNS"]
         self.assertEqual(len(sec_docs), 2)
         self.assertEqual(sec_docs[0]["metadata"]["clause"], "103(1)")
         self.assertEqual(sec_docs[1]["metadata"]["clause"], "103(2)")
 
     def test_section_302(self):
-        sec_docs = [d for d in self.docs if d["metadata"]["section"] == 302]
+        sec_docs = [d for d in self.docs if d["metadata"]["section"] == 302 and d["metadata"].get("act") == "BNS"]
         self.assertEqual(len(sec_docs), 1)
         self.assertEqual(sec_docs[0]["metadata"]["clause"], "")
         self.assertEqual(sec_docs[0]["id"], "bns_302")
 
     def test_section_358(self):
-        sec_docs = [d for d in self.docs if d["metadata"]["section"] == 358]
+        sec_docs = [d for d in self.docs if d["metadata"]["section"] == 358 and d["metadata"].get("act") == "BNS"]
         self.assertEqual(len(sec_docs), 1)
         doc = sec_docs[0]
         self.assertEqual(doc["id"], "bns_358")
         doc_text = doc["text"]
         self.assertNotIn("STATEMENT OF OBJECTS AND REASONS", doc_text)
         self.assertIn("with regard to the effect of \nthe repeal.", doc_text)
-        self.assertEqual(len(self.docs), 536)
+        self.assertEqual(len(self.docs), 553)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

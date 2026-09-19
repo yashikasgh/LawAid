@@ -66,6 +66,8 @@ def test_login_wrong_password_fails():
     assert response.status_code == 401
 
 def test_protected_route_requires_token():
+    client.cookies.clear()
+    client.headers.clear()
     response = client.get("/auth/me")
     assert response.status_code == 401
 

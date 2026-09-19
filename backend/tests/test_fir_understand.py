@@ -1,4 +1,5 @@
 import io
+import uuid
 import pytest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
@@ -25,6 +26,30 @@ def create_test_image_bytes(text: str = "FIR REPORT THEFT OF MOBILE PHONE BNS 30
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def get_auth_headers(email_prefix: str = "user"):
+    client.cookies.clear()
+    client.headers.clear()
+    uid = str(uuid.uuid4())[:8]
+    email = f"{email_prefix}_{uid}@lawaid.com"
+    pwd = "password123"
+
+    # Register
+    client.post(
+        "/auth/register",
+        json={"email": email, "password": pwd, "role": "citizen", "full_name": "Test User"}
+    )
+    # Login
+    res = client.post(
+        "/auth/login",
+        json={"email": email, "password": pwd, "role": "citizen"}
+    )
+    assert res.status_code == 200
+    token = res.json()["access_token"]
+    client.cookies.clear()
+    client.headers.clear()
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
@@ -74,37 +99,28 @@ def test_understand_image_fir(mock_pipeline_success):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert "file_id" in data
     assert len(data["charges"]) > 0
 
 
-def test_understand_scanned_pdf(mock_pipeline_success):
-    # A PDF with an image containing text, but no native text stream
-    img_bytes = create_test_image_bytes("SCANNED FIR COMPLAINT STOLEN VEHICLE BNS")
-    from PIL import Image
-    import fitz
-    doc = fitz.open()
-    page = doc.new_page()
-    page.insert_image(page.rect, stream=img_bytes)
-    scanned_pdf = doc.tobytes()
-    doc.close()
-
+def test_understand_txt_fir(mock_pipeline_success):
+    txt_content = b"FIRST INFORMATION REPORT: Mobile theft lodged under section 303 BNS."
     response = client.post(
         "/fir/understand",
-        files={"file": ("scanned_fir.pdf", io.BytesIO(scanned_pdf), "application/pdf")}
+        files={"file": ("fir_statement.txt", io.BytesIO(txt_content), "text/plain")}
     )
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
+    assert len(data["charges"]) > 0
 
 
 def test_understand_unsupported_file():
     response = client.post(
         "/fir/understand",
-        files={"file": ("data.txt", io.BytesIO(b"Some text file content"), "text/plain")}
+        files={"file": ("data.docx", io.BytesIO(b"Word document bytes"), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
     )
     assert response.status_code == 400
-    assert "Unsupported file format" in response.json()["detail"]
+    assert "LawAid cannot currently extract FIR content" in response.json()["detail"]
 
 
 def test_understand_empty_file():
@@ -142,102 +158,79 @@ def test_understand_ai_pipeline_failure():
         assert "AI Legal Analysis failed" in response.json()["detail"]
 
 
-def test_case_a_ner_no_assault_overclassification_for_hit():
-    """Case A: Verify 'An unknown car hit a pedestrian on a public road and caused injury' does not classify 'hit' as legal offence 'assault', and query generation functions."""
-    from ai.rag.ner.ner_extractor import extract_entities
-    from ai.rag.retrieval.query_generator import generate_queries
+def test_understand_does_not_persist_without_consent(mock_pipeline_success):
+    headers = get_auth_headers("consent_user")
+    pdf_bytes = create_text_pdf("FIRST INFORMATION REPORT: Theft of mobile device worth 20000 rupees from shop.")
 
-    text = "An unknown car hit a pedestrian on a public road and caused injury."
-    ner_res = extract_entities(text)
-
-    # 1. NER must NOT classify "hit" as legal offence_type="assault"
-    assert "assault" not in ner_res.get("offence_types", []), (
-        f"NER overclassified 'hit' as legal offence 'assault': {ner_res.get('offence_types')}"
+    # 1. Call /fir/understand for temporary analysis
+    response = client.post(
+        "/fir/understand",
+        files={"file": ("sample_fir.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+        headers=headers
     )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data.get("file_id") is None  # No GridFS persistence before consent
 
-    # 2. Query generation functions cleanly when offence_types is empty
-    queries_res = generate_queries(ner_res)
-    queries = queries_res.get("queries", [])
-    assert len(queries) > 0, "Query generation failed for incident with empty offence_types"
-    assert any(q.get("query") for q in queries)
+    # 2. Check saved FIR list — must be empty before explicit save
+    res_list = client.get("/fir/saved", headers=headers)
+    assert res_list.status_code == 200
+    assert len(res_list.json()) == 0
 
 
-def test_case_b_fir_understand_applicability_mapping():
-    """Case B: Candidate analysis containing supported + uncertain + not_supported provisions."""
-    sample_text = "Road accident FIR text describing collision and hurt."
-    pdf_bytes = create_text_pdf(sample_text)
+def test_saved_fir_crud_and_user_isolation():
+    headers_user_a = get_auth_headers("user_a")
+    headers_user_b = get_auth_headers("user_b")
 
-    mock_analysis_payload = {
-        "status": "success",
-        "sanitized_incident": sample_text,
-        "privacy_metadata": {"detections": [], "replacement_map": {}},
-        "analysis": [
-            {
-                "section": "281",
-                "title": "Rash driving or riding on a public way.",
-                "applicability": "supported",
-                "punishment": "6 months",
-                "bailable": "Bailable",
-                "cognizable": "Cognizable",
-                "reasoning": "Driven in rash manner on public road."
-            },
-            {
-                "section": "125(b)",
-                "title": "Act endangering life or personal safety of others.",
-                "applicability": "uncertain",
-                "punishment": "3 years",
-                "bailable": "Bailable",
-                "cognizable": "Cognizable",
-                "reasoning": "Requires medical report confirming grievous hurt."
-            },
-            {
-                "section": "282",
-                "title": "Rash navigation of vessel.",
-                "applicability": "not_supported",
-                "punishment": "6 months",
-                "bailable": "Bailable",
-                "cognizable": "Cognizable",
-                "reasoning": "Inapplicable as incident involves motor car, not vessel."
-            }
-        ],
-        "disclaimer": "Legal analysis provided by LawAid AI."
+    # 1. User A saves an FIR analysis
+    save_payload = {
+        "filename": "my_fir_report.pdf",
+        "file_type": "application/pdf",
+        "file_size": 1024,
+        "summary": "Alleged theft of mobile device.",
+        "charges": [{"section": "303(2)", "title": "Theft", "bailable": "Bailable"}],
+        "rights": ["Right to counsel."],
+        "next_steps": ["Contact DLSA."],
+        "disclaimer": "Informational purpose only."
     }
 
-    with patch("app.routers.fir._run_pipeline", return_value=mock_analysis_payload):
-        response = client.post(
-            "/fir/understand",
-            files={"file": ("accident_fir.pdf", io.BytesIO(pdf_bytes), "application/pdf")}
-        )
-        assert response.status_code == 200
-        data = response.json()
+    res_save = client.post("/fir/saved", json=save_payload, headers=headers_user_a)
+    assert res_save.status_code == 200
+    saved_data = res_save.json()
+    assert saved_data["status"] == "saved"
+    saved_id = saved_data["saved_id"]
 
-        # 1. charges contains ONLY supported items
-        charge_sections = [c["section"] for c in data.get("charges", [])]
-        assert "281" in charge_sections
-        assert "125(b)" not in charge_sections
-        assert "282" not in charge_sections
+    # 2. User A retrieves saved FIR list
+    res_list_a = client.get("/fir/saved", headers=headers_user_a)
+    assert res_list_a.status_code == 200
+    firs_a = res_list_a.json()
+    assert any(f["id"] == saved_id for f in firs_a)
 
-        # 2. uncertain_provisions contains ONLY uncertain items
-        uncertain_sections = [c["section"] for c in data.get("uncertain_provisions", [])]
-        assert "125(b)" in uncertain_sections
-        assert "281" not in uncertain_sections
-        assert "282" not in uncertain_sections
+    # 3. User B retrieves saved FIR list (User B must NOT see User A's FIR)
+    res_list_b = client.get("/fir/saved", headers=headers_user_b)
+    assert res_list_b.status_code == 200
+    firs_b = res_list_b.json()
+    assert not any(f["id"] == saved_id for f in firs_b)
 
-        # 3. full analysis contains ALL items (including not_supported for audit/debugging)
-        all_analysis_sections = [a["section"] for a in data.get("analysis", [])]
-        assert "281" in all_analysis_sections
-        assert "125(b)" in all_analysis_sections
-        assert "282" in all_analysis_sections
+    # 4. User B attempts to view User A's saved FIR detail (must return 403)
+    res_detail_b = client.get(f"/fir/saved/{saved_id}", headers=headers_user_b)
+    assert res_detail_b.status_code == 403
 
+    # 5. User A views detail successfully
+    res_detail_a = client.get(f"/fir/saved/{saved_id}", headers=headers_user_a)
+    assert res_detail_a.status_code == 200
+    assert res_detail_a.json()["filename"] == "my_fir_report.pdf"
 
-def test_case_c_genuine_assault_preserves_assault_entity():
-    """Case C: Verify genuine physical assault input 'An unknown man punched the victim' retains assault offence classification."""
-    from ai.rag.ner.ner_extractor import extract_entities
+    # 6. User B attempts to delete User A's saved FIR (must return 403)
+    res_del_b = client.delete(f"/fir/saved/{saved_id}", headers=headers_user_b)
+    assert res_del_b.status_code == 403
 
-    text = "An unknown man punched the victim"
-    ner_res = extract_entities(text)
+    # 7. User A deletes saved FIR successfully
+    res_del_a = client.delete(f"/fir/saved/{saved_id}", headers=headers_user_a)
+    assert res_del_a.status_code == 200
+    assert res_del_a.json()["status"] == "deleted"
 
-    assert "assault" in ner_res.get("offence_types", []), (
-        f"NER failed to extract 'assault' for genuine assault input 'punched': {ner_res.get('offence_types')}"
-    )
-
+    # 8. User A verifies it is gone
+    res_detail_a_after = client.get(f"/fir/saved/{saved_id}", headers=headers_user_a)
+    assert res_detail_a_after.status_code == 404

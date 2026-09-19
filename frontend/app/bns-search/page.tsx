@@ -180,25 +180,6 @@ export default function BNSSearchPage() {
           {results.length > 0 && (
             <section className="mt-9">
 
-              <div className="mb-5">
-                <div className="flex items-center gap-3 mb-3">
-                  <span className="h-px w-8 bg-[#b98528]" />
-
-                  <span className="text-[10px] tracking-[0.25em] uppercase text-[#56718f] font-medium">
-                    SEARCH OUTPUT
-                  </span>
-                </div>
-
-                <h2 className="font-serif text-3xl font-semibold text-[#12335B]">
-                  Search Results
-                </h2>
-
-                <p className="mt-1 text-sm text-[#56718f]">
-                  {results.length} relevant section
-                  {results.length !== 1 ? 's' : ''} found
-                </p>
-              </div>
-
               <div className="grid gap-4">
 
                 {results.map((result) => (
@@ -307,15 +288,7 @@ export default function BNSSearchPage() {
               </section>
             )}
 
-          {/* Development notice */}
-          <div className="mt-8 rounded-[14px] border border-yellow-300/70 bg-yellow-50/85 backdrop-blur-sm px-4 py-3 text-xs text-yellow-800">
 
-            <strong>Development note:</strong> The frontend is connected to the
-            BNS search API, but the current backend endpoint returns mock BNS
-            results. The actual retrieval system can replace this data without
-            changing this page.
-
-          </div>
 
         </div>
       </main>
