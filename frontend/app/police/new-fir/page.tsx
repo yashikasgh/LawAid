@@ -3,8 +3,24 @@
 import Link from 'next/link'
 import { useState, useRef, useEffect } from 'react'
 import Navbar from '@/components/Navbar'
-import { policeAPI } from '@/lib/api'
+import { policeAPI, firDraftsAPI } from '@/lib/api'
 import { ActSectionEntry } from '@/lib/pdf/fir-generator'
+
+export type BnsSuggestion = {
+  id: string
+  section: string
+  title: string
+  act: string
+  why_it_may_apply: string
+  supporting_facts: string[]
+  uncertainty: string[]
+  punishment: string
+  grounding_source: string
+  status: string
+  applicability: string
+  accepted?: boolean
+  removed?: boolean
+}
 
 type FormData = {
   district: string
@@ -75,7 +91,7 @@ const initialForm: FormData = {
     {
       act: 'Bharatiya Nyaya Sanhita, 2023',
       section: '',
-      source: 'ai',
+      source: 'manual',
     },
   ],
   act1: 'Bharatiya Nyaya Sanhita, 2023',
@@ -143,90 +159,300 @@ const SAMPLE_INCIDENTS = [
   },
 ]
 
-function mapFirDataToFormData(firData: any, sanitizedIncident: string): FormData {
+function mapFirDataToFormData(firData: any, sanitizedIncident: string, existingForm?: FormData): FormData {
   const occ = firData?.occurrence || {}
   const place = firData?.place_of_occurrence || {}
   const comp = firData?.complainant || {}
   const officer = firData?.officer || {}
-  const acts = firData?.acts_sections || []
   const info = firData?.information_received || {}
   const gd = firData?.general_diary || {}
   const dispatch = firData?.dispatch_to_court || {}
 
-  const sanitizeVal = (val?: string) => {
-    if (!val || val === 'Not provided' || val === 'N/A' || val === 'Unknown') return ''
-    return val.trim()
+  const sanitizeVal = (val?: any): string => {
+    if (val === null || val === undefined) return ''
+    const str = String(val).trim()
+    const lower = str.toLowerCase()
+    if (
+      lower === 'not provided' ||
+      lower === 'n/a' ||
+      lower === 'unknown' ||
+      lower === 'none' ||
+      lower === 'null' ||
+      lower === 'to be dispatched'
+    ) {
+      return ''
+    }
+    return str
   }
+
+  const getFirstVal = (...vals: any[]): string => {
+    for (const v of vals) {
+      const s = sanitizeVal(v)
+      if (s) return s
+    }
+    return ''
+  }
+
+  const incidentText = sanitizedIncident || ''
+
+  // 1. Identification
+  const district = getFirstVal(firData?.district, existingForm?.district)
+  const policeStation = getFirstVal(firData?.police_station, firData?.policeStation, existingForm?.policeStation)
+  const year = getFirstVal(firData?.year, existingForm?.year) || new Date().getFullYear().toString()
+  const firNo = getFirstVal(firData?.fir_number, firData?.firNo, existingForm?.firNo) || 'Draft'
+  const firDate = getFirstVal(firData?.fir_date, firData?.firDate, existingForm?.firDate) || new Date().toLocaleDateString('en-GB')
+
+  // 2. Occurrence
+  let occurrenceDate = getFirstVal(
+    occ.date,
+    occ.date_from,
+    firData?.occurrence_date,
+    firData?.occurrenceDate,
+    firData?.date,
+    existingForm?.occurrenceDate
+  )
+  let occurrenceTime = getFirstVal(
+    occ.time,
+    occ.time_from,
+    firData?.occurrence_time,
+    firData?.occurrenceTime,
+    firData?.time,
+    existingForm?.occurrenceTime
+  )
+  let occurrenceDay = getFirstVal(
+    occ.day,
+    firData?.occurrence_day,
+    firData?.occurrenceDay,
+    firData?.day,
+    existingForm?.occurrenceDay
+  )
+
+  if (!occurrenceDate && incidentText) {
+    const mDate = incidentText.match(/\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})\b/i)
+    if (mDate) {
+      occurrenceDate = mDate[0]
+    } else {
+      const mSlash = incidentText.match(/\b(\d{1,2}\/\d{1,2}\/\d{2,4})\b/)
+      if (mSlash) occurrenceDate = mSlash[0]
+    }
+  }
+
+  if (!occurrenceTime && incidentText) {
+    const mTime = incidentText.match(/\b(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)\b/i)
+    if (mTime) occurrenceTime = mTime[0]
+  }
+
+  // 3. Information type & diary
+  const informationType = getFirstVal(firData?.type_of_information, firData?.informationType, existingForm?.informationType) || 'Written'
+  const informationDate = getFirstVal(info.date, firData?.informationDate, existingForm?.informationDate)
+  const informationTime = getFirstVal(info.time, firData?.informationTime, existingForm?.informationTime)
+  const gdEntry = getFirstVal(gd.entry_numbers, firData?.gdEntry, existingForm?.gdEntry)
+  const gdTime = getFirstVal(gd.time, firData?.gdTime, existingForm?.gdTime)
+
+  // 4. Place of occurrence
+  let placeAddress = getFirstVal(
+    place.address,
+    firData?.place_address,
+    firData?.placeAddress,
+    firData?.location,
+    firData?.address,
+    existingForm?.placeAddress
+  )
+  const placeDirection = getFirstVal(place.direction_distance_from_ps, firData?.placeDirection, existingForm?.placeDirection)
+  const beatNo = getFirstVal(place.beat_no, firData?.beatNo, existingForm?.beatNo)
+  const outsidePoliceStation = getFirstVal(place.outside_police_station, firData?.outsidePoliceStation, existingForm?.outsidePoliceStation)
+  const outsideDistrict = getFirstVal(place.district, firData?.outsideDistrict, existingForm?.outsideDistrict)
+
+  if (!placeAddress && incidentText) {
+    const mLoc = incidentText.match(/\b(?:near|at|around|in)\s+(?:the\s+)?([a-zA-Z0-9\s,-]+?(?:market|road|street|station|bus stand|park|shop|colony|nagar|area|house|store|mall|place|junction|cross|village|city|bazaar))\b/i)
+    if (mLoc) placeAddress = mLoc[0]
+  }
+
+  // 5. Complainant
+  const complainantName = getFirstVal(comp.name, firData?.complainant_name, firData?.complainantName, existingForm?.complainantName)
+  const fatherHusbandName = getFirstVal(comp.father_husband_name, firData?.fatherHusbandName, existingForm?.fatherHusbandName)
+  const dob = getFirstVal(comp.date_year_of_birth, firData?.dob, existingForm?.dob)
+  const nationality = getFirstVal(comp.nationality, firData?.nationality, existingForm?.nationality) || 'Indian'
+  const passportNo = getFirstVal(comp.passport_no, firData?.passportNo, existingForm?.passportNo)
+  const passportDate = getFirstVal(comp.passport_date_of_issue, firData?.passportDate, existingForm?.passportDate)
+  const passportPlace = getFirstVal(comp.passport_place_of_issue, firData?.passportPlace, existingForm?.passportPlace)
+  const occupation = getFirstVal(comp.occupation, firData?.occupation, existingForm?.occupation)
+  const complainantAddress = getFirstVal(comp.address, firData?.complainantAddress, existingForm?.complainantAddress)
+
+  // 6. Accused details
+  let accusedDetails = getFirstVal(
+    firData?.accused_details,
+    firData?.accusedDetails,
+    firData?.accused,
+    existingForm?.accusedDetails
+  )
+  if (!accusedDetails && incidentText) {
+    const lowerInc = incidentText.toLowerCase()
+    if (lowerInc.includes('unknown man') || lowerInc.includes('unknown male')) {
+      accusedDetails = 'Unknown male accused; identity not known at this stage.'
+    } else if (lowerInc.includes('unknown woman') || lowerInc.includes('unknown female')) {
+      accusedDetails = 'Unknown female accused; identity not known at this stage.'
+    } else if (lowerInc.includes('unknown')) {
+      accusedDetails = 'Unknown accused person(s); identity not known at this stage.'
+    }
+  }
+
+  // 7. Property details & value
+  let propertyDetails = getFirstVal(
+    firData?.property_details,
+    firData?.propertyDetails,
+    firData?.property,
+    firData?.stolen_property,
+    existingForm?.propertyDetails
+  )
+  let propertyValue = getFirstVal(
+    firData?.property_value,
+    firData?.propertyValue,
+    firData?.estimated_value,
+    firData?.value,
+    existingForm?.propertyValue
+  )
+
+  if (!propertyValue && incidentText) {
+    const mVal = incidentText.match(/(?:₹|rs\.?|rupees)\s*([\d,]+)/i)
+    if (mVal) {
+      propertyValue = `₹${mVal[1]}`
+    }
+  }
+
+  // 8. FIR contents narrative
+  const firContents = getFirstVal(
+    firData?.fir_contents,
+    firData?.firContents,
+    firData?.narrative,
+    firData?.statement,
+    existingForm?.firContents,
+    sanitizedIncident
+  )
+
+  // 9. Officer & Action
+  const actionTaken = getFirstVal(firData?.action_taken, firData?.actionTaken, existingForm?.actionTaken) || 'Registered the case and took up the investigation'
+  const officerRank = getFirstVal(officer.rank, firData?.officerRank, existingForm?.officerRank)
+  const officerName = getFirstVal(officer.name, firData?.officerName, existingForm?.officerName)
+  const officerNo = getFirstVal(officer.number, firData?.officerNo, existingForm?.officerNo)
+  const dispatchDate = getFirstVal(dispatch.date, firData?.dispatchDate, existingForm?.dispatchDate)
+  const dispatchTime = getFirstVal(dispatch.time, firData?.dispatchTime, existingForm?.dispatchTime)
+
+  const actEntries = existingForm?.actEntries && existingForm.actEntries.length > 0
+    ? existingForm.actEntries
+    : [
+        {
+          act: 'Bharatiya Nyaya Sanhita, 2023',
+          section: '',
+          source: 'manual' as const,
+        },
+      ]
 
   return {
-    district: sanitizeVal(firData?.district),
-    policeStation: sanitizeVal(firData?.police_station),
-    year: sanitizeVal(firData?.year) || new Date().getFullYear().toString(),
-    firNo: sanitizeVal(firData?.fir_number) || 'Draft',
-    firDate: sanitizeVal(firData?.fir_date) || new Date().toLocaleDateString('en-GB'),
+    district,
+    policeStation,
+    year,
+    firNo,
+    firDate,
 
-    actEntries: Array.isArray(acts) && acts.length > 0
-      ? acts.map((a: any) => ({
-          act: a.act || 'Bharatiya Nyaya Sanhita, 2023',
-          section: sanitizeVal(a.sections),
-          source: 'ai' as const,
-        }))
-      : [
-          {
-            act: 'Bharatiya Nyaya Sanhita, 2023',
-            section: '',
-            source: 'ai' as const,
-          },
-        ],
-    act1: acts[0]?.act || 'Bharatiya Nyaya Sanhita, 2023',
-    section1: sanitizeVal(acts[0]?.sections),
-    act2: acts[1]?.act || (acts[1]?.sections ? 'Bharatiya Nyaya Sanhita, 2023' : ''),
-    section2: sanitizeVal(acts[1]?.sections),
-    act3: acts[2]?.act || (acts[2]?.sections ? 'Bharatiya Nyaya Sanhita, 2023' : ''),
-    section3: sanitizeVal(acts[2]?.sections),
-    otherActs: acts.slice(3).map((a: any) => `${a.act} - ${a.sections}`).join('\n'),
+    actEntries,
+    act1: existingForm?.act1 || 'Bharatiya Nyaya Sanhita, 2023',
+    section1: existingForm?.section1 || '',
+    act2: existingForm?.act2 || '',
+    section2: existingForm?.section2 || '',
+    act3: existingForm?.act3 || '',
+    section3: existingForm?.section3 || '',
+    otherActs: existingForm?.otherActs || '',
 
-    occurrenceDay: sanitizeVal(occ.day),
-    occurrenceDate: sanitizeVal(occ.date || occ.date_from),
-    occurrenceTime: sanitizeVal(occ.time || occ.time_from),
-    informationDate: sanitizeVal(info.date),
-    informationTime: sanitizeVal(info.time),
-    gdEntry: sanitizeVal(gd.entry_numbers),
-    gdTime: sanitizeVal(gd.time),
+    occurrenceDay,
+    occurrenceDate,
+    occurrenceTime,
+    informationDate,
+    informationTime,
+    gdEntry,
+    gdTime,
 
-    informationType: sanitizeVal(firData?.type_of_information) || 'Written',
+    informationType,
 
-    placeDirection: sanitizeVal(place.direction_distance_from_ps),
-    beatNo: sanitizeVal(place.beat_no),
-    placeAddress: sanitizeVal(place.address),
-    outsidePoliceStation: sanitizeVal(place.outside_police_station),
-    outsideDistrict: sanitizeVal(place.district),
+    placeDirection,
+    beatNo,
+    placeAddress,
+    outsidePoliceStation,
+    outsideDistrict,
 
-    complainantName: sanitizeVal(comp.name),
-    fatherHusbandName: sanitizeVal(comp.father_husband_name),
-    dob: sanitizeVal(comp.date_year_of_birth),
-    nationality: sanitizeVal(comp.nationality) || 'Indian',
-    passportNo: sanitizeVal(comp.passport_no),
-    passportDate: sanitizeVal(comp.passport_date_of_issue),
-    passportPlace: sanitizeVal(comp.passport_place_of_issue),
-    occupation: sanitizeVal(comp.occupation),
-    complainantAddress: sanitizeVal(comp.address),
+    complainantName,
+    fatherHusbandName,
+    dob,
+    nationality,
+    passportNo,
+    passportDate,
+    passportPlace,
+    occupation,
+    complainantAddress,
 
-    accusedDetails: sanitizeVal(firData?.accused_details),
-    delayReason: sanitizeVal(firData?.delay_reason),
-    propertyDetails: sanitizeVal(firData?.property_details),
-    propertyValue: sanitizeVal(firData?.property_value),
-    inquestDetails: sanitizeVal(firData?.inquest_ud_case),
-    firContents: sanitizeVal(firData?.fir_contents) || sanitizedIncident || '',
+    accusedDetails,
+    delayReason: getFirstVal(firData?.delay_reason, firData?.delayReason, existingForm?.delayReason),
+    propertyDetails,
+    propertyValue,
+    inquestDetails: getFirstVal(firData?.inquest_ud_case, firData?.inquestDetails, existingForm?.inquestDetails),
+    firContents,
 
-    actionTaken: sanitizeVal(firData?.action_taken) || 'Registered the case and took up the investigation',
-    officerRank: sanitizeVal(officer.rank),
-    officerName: sanitizeVal(officer.name),
-    officerNo: sanitizeVal(officer.number),
+    actionTaken,
+    officerRank,
+    officerName,
+    officerNo,
 
-    dispatchDate: sanitizeVal(dispatch.date),
-    dispatchTime: sanitizeVal(dispatch.time),
+    dispatchDate,
+    dispatchTime,
   }
+}
+
+export function extractSectionNumber(secStr: string): string {
+  if (!secStr) return ''
+  const match = secStr.match(/\b\d+[\w()]*\b/)
+  return match ? match[0] : secStr.trim().toLowerCase()
+}
+
+export function deriveActEntries(
+  currentEntries: ActSectionEntry[],
+  suggestions: BnsSuggestion[]
+): ActSectionEntry[] {
+  const manualEntries = (currentEntries || []).filter(
+    (entry) => entry.source === 'manual' && entry.section && entry.section.trim() !== ''
+  )
+
+  const acceptedSuggestions = (suggestions || []).filter(
+    (sug) => sug.accepted && !sug.removed
+  )
+
+  const aiEntries: ActSectionEntry[] = acceptedSuggestions.map((sug) => {
+    const formattedSection = sug.title
+      ? `Section ${sug.section} — ${sug.title}`
+      : `Section ${sug.section}`
+    return {
+      act: sug.act || 'Bharatiya Nyaya Sanhita, 2023',
+      section: formattedSection,
+      source: 'ai' as const,
+    }
+  })
+
+  const aiSectionNums = new Set(aiEntries.map((e) => extractSectionNumber(e.section)))
+
+  const nonDuplicateManual = manualEntries.filter(
+    (e) => !aiSectionNums.has(extractSectionNumber(e.section))
+  )
+
+  if (aiEntries.length > 0 || nonDuplicateManual.length > 0) {
+    return [...nonDuplicateManual, ...aiEntries]
+  }
+
+  return [
+    {
+      act: 'Bharatiya Nyaya Sanhita, 2023',
+      section: '',
+      source: 'manual' as const,
+    },
+  ]
 }
 
 export default function NewFIRPage() {
@@ -236,6 +462,8 @@ export default function NewFIRPage() {
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState('')
   const [draftGenerated, setDraftGenerated] = useState(false)
+  const [legalSuggestions, setLegalSuggestions] = useState<BnsSuggestion[]>([])
+  const [legalAnalysisWarning, setLegalAnalysisWarning] = useState('')
   const [supportedSections, setSupportedSections] = useState<string[]>([])
   const [verifiedByOfficer, setVerifiedByOfficer] = useState(false)
   const [showRegenerateModal, setShowRegenerateModal] = useState(false)
@@ -256,12 +484,25 @@ export default function NewFIRPage() {
         setSpeechSupported(false)
       }
 
-      const saved = sessionStorage.getItem('lawaid_fir_draft')
+      const saved = sessionStorage.getItem('lawaid_fir_draft') || localStorage.getItem('lawaid_fir_draft')
       if (saved) {
         try {
           const parsed = JSON.parse(saved)
           if (parsed.statement) setStatement(parsed.statement)
-          setForm((prev) => ({ ...prev, ...parsed }))
+          if (parsed.legalSuggestions) setLegalSuggestions(parsed.legalSuggestions)
+          if (parsed.legalAnalysisWarning) setLegalAnalysisWarning(parsed.legalAnalysisWarning)
+          if (parsed.supportedSections) setSupportedSections(parsed.supportedSections)
+          if (parsed.verifiedByOfficer !== undefined) setVerifiedByOfficer(parsed.verifiedByOfficer)
+
+          const derivedEntries = deriveActEntries(parsed.actEntries || [], parsed.legalSuggestions || [])
+          const syncedForm = getSynchronizedForm({
+            ...parsed,
+            actEntries: derivedEntries,
+          })
+          setForm((prev) => ({
+            ...prev,
+            ...syncedForm,
+          }))
           setDraftGenerated(true)
         } catch (e) {
           console.error('Failed to parse saved draft:', e)
@@ -269,6 +510,20 @@ export default function NewFIRPage() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    setForm((prev) => {
+      const derived = deriveActEntries(prev.actEntries, legalSuggestions)
+      const synced = getSynchronizedForm({
+        ...prev,
+        actEntries: derived,
+      })
+      if (JSON.stringify(prev) === JSON.stringify(synced)) {
+        return prev
+      }
+      return synced
+    })
+  }, [legalSuggestions])
 
   function toggleListening() {
     if (isListening) {
@@ -357,8 +612,10 @@ export default function NewFIRPage() {
       const resData = response.data
 
       if (resData && resData.fir_data) {
-        const mappedForm = mapFirDataToFormData(resData.fir_data, resData.sanitized_incident || statement)
+        const mappedForm = mapFirDataToFormData(resData.fir_data, resData.sanitized_incident || statement, form)
         setForm(mappedForm)
+        setLegalSuggestions(resData.legal_suggestions || [])
+        setLegalAnalysisWarning(resData.legal_analysis_warning || '')
         setSupportedSections(resData.supported_sections || [])
         setDraftGenerated(true)
         setVerifiedByOfficer(false)
@@ -373,6 +630,38 @@ export default function NewFIRPage() {
     }
   }
 
+  function handleAcceptSuggestion(index: number) {
+    setLegalSuggestions((prev) => {
+      const updated = [...prev]
+      if (updated[index]) {
+        updated[index] = { ...updated[index], accepted: true, removed: false }
+      }
+      setForm((formPrev) =>
+        getSynchronizedForm({
+          ...formPrev,
+          actEntries: deriveActEntries(formPrev.actEntries, updated),
+        })
+      )
+      return updated
+    })
+  }
+
+  function handleRemoveSuggestion(index: number) {
+    setLegalSuggestions((prev) => {
+      const updated = [...prev]
+      if (updated[index]) {
+        updated[index] = { ...updated[index], accepted: false, removed: true }
+      }
+      setForm((formPrev) =>
+        getSynchronizedForm({
+          ...formPrev,
+          actEntries: deriveActEntries(formPrev.actEntries, updated),
+        })
+      )
+      return updated
+    })
+  }
+
   function updateActEntry(index: number, field: 'act' | 'section', value: string) {
     setForm((prev) => {
       const updated = [...(prev.actEntries || [])]
@@ -382,34 +671,47 @@ export default function NewFIRPage() {
           [field]: value,
         }
       }
-      return {
+      return getSynchronizedForm({
         ...prev,
         actEntries: updated,
-      }
+      })
     })
   }
 
   function addActEntry() {
-    setForm((prev) => ({
-      ...prev,
-      actEntries: [
-        ...(prev.actEntries || []),
-        {
-          act: 'Bharatiya Nyaya Sanhita, 2023',
-          section: '',
-          source: 'manual',
-        },
-      ],
-    }))
+    setForm((prev) =>
+      getSynchronizedForm({
+        ...prev,
+        actEntries: [
+          ...(prev.actEntries || []),
+          {
+            act: 'Bharatiya Nyaya Sanhita, 2023',
+            section: '',
+            source: 'manual',
+          },
+        ],
+      })
+    )
   }
 
   function removeActEntry(index: number) {
     setForm((prev) => {
+      const target = (prev.actEntries || [])[index]
+      if (target && target.source === 'ai') {
+        const targetSecNum = extractSectionNumber(target.section)
+        setLegalSuggestions((sugs) =>
+          sugs.map((sug) =>
+            extractSectionNumber(sug.section) === targetSecNum
+              ? { ...sug, accepted: false, removed: true }
+              : sug
+          )
+        )
+      }
       const updated = (prev.actEntries || []).filter((_, i) => i !== index)
-      return {
+      return getSynchronizedForm({
         ...prev,
         actEntries: updated.length > 0 ? updated : [{ act: 'Bharatiya Nyaya Sanhita, 2023', section: '', source: 'manual' }],
-      }
+      })
     })
   }
 
@@ -442,37 +744,30 @@ export default function NewFIRPage() {
     const draftPayload = {
       ...syncedForm,
       statement,
+      legalSuggestions,
+      legalAnalysisWarning,
+      supportedSections,
+      verifiedByOfficer,
     }
     
     // Fallback to session storage just in case
     sessionStorage.setItem('lawaid_fir_draft', JSON.stringify(draftPayload))
     
     try {
-      const token = localStorage.getItem('access_token')
       const draftId = sessionStorage.getItem('lawaid_draft_id')
       if (draftId) {
         (draftPayload as any).draft_id = draftId
       }
       
-      const res = await fetch('http://localhost:8000/fir/drafts', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(draftPayload)
-      })
-      if (res.ok) {
-        const data = await res.json()
-        if (data.draft_id) {
-          sessionStorage.setItem('lawaid_draft_id', data.draft_id)
-        }
+      const res = await firDraftsAPI.saveDraft(draftPayload)
+      if (res.data && res.data.draft_id) {
+        sessionStorage.setItem('lawaid_draft_id', res.data.draft_id)
         setSaveStatus('Draft saved securely to backend!')
       } else {
         setSaveStatus('Draft saved locally (backend unavailable).')
       }
     } catch (e) {
-      setSaveStatus('Draft saved locally (network error).')
+      setSaveStatus('Draft saved locally (backend unavailable).')
     }
     
     setTimeout(() => setSaveStatus(''), 3000)
@@ -638,42 +933,175 @@ export default function NewFIRPage() {
             </div>
           </section>
 
-          {/* STEP 2: POLICE OFFICER REVIEW & VERIFICATION BANNER */}
+          {/* STEP 2: AI-SUGGESTED BNS PROVISIONS — OFFICER REVIEW REQUIRED */}
           {draftGenerated && (
-            <section className="bg-emerald-50/90 border border-emerald-300 rounded-[20px] p-6 shadow-sm mb-8 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-emerald-200">
-                <div className="flex items-center gap-2 text-emerald-900 font-bold text-base">
-                  <span className="w-3 h-3 rounded-full bg-emerald-600 animate-pulse" />
-                  <span>AI-Generated FIR Draft — Official FIR Template</span>
+            <section className="bg-white/95 backdrop-blur-md rounded-[20px] p-6 sm:p-7 shadow-[0_15px_40px_rgba(18,51,91,0.10)] border border-white/80 mb-8 space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-gray-200">
+                <div>
+                  <h2 className="font-serif text-xl font-bold text-[#12335B] flex items-center gap-2">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#12335B] text-white text-xs font-bold">
+                      2
+                    </span>
+                    AI-Suggested BNS Provisions — Officer Review Required
+                  </h2>
+                  <p className="text-xs text-gray-600 mt-1 font-medium">
+                    Provisions identified by LawAid's grounded legal analysis. Review each suggestion and click <strong>[ Accept ]</strong> to populate it into the FIR Acts & Sections or <strong>[ Remove ]</strong> to discard.
+                  </p>
                 </div>
-                {verifiedByOfficer ? (
-                  <span className="text-xs font-bold text-emerald-900 bg-emerald-200/90 px-3 py-1 rounded-full border border-emerald-400 flex items-center gap-1">
-                    ✓ Officer Verified
+
+                <div className="shrink-0">
+                  <span className="text-xs font-bold text-amber-900 bg-amber-100 px-3 py-1 rounded-full border border-amber-300">
+                    AI-Suggested — Officer Review Required
                   </span>
-                ) : (
-                  <span className="text-xs font-bold text-amber-900 bg-amber-100/90 px-3 py-1 rounded-full border border-amber-300 flex items-center gap-1">
-                    AI-Generated Draft — Pending Verification
-                  </span>
-                )}
+                </div>
               </div>
 
-              <p className="text-xs text-emerald-950 leading-relaxed">
-                <strong>Review Notice:</strong> Review and edit all details in the official IF1 FIR template below before final officer verification and PDF preview.
-              </p>
-
-              {supportedSections.length > 0 && (
-                <div className="pt-2">
-                  <p className="text-xs font-bold text-emerald-900 mb-1.5">
-                    Grounded BNS 2023 Sections Identified via RAG:
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {supportedSections.map((sec, idx) => (
-                      <span key={idx} className="text-xs bg-emerald-700 text-white px-3 py-1 rounded-lg font-bold shadow-sm">
-                        {sec}
-                      </span>
-                    ))}
+              {/* Warning banner if legal analysis failed or had issues */}
+              {legalAnalysisWarning && (
+                <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-900 font-medium leading-relaxed flex items-start gap-3">
+                  <span className="text-base shrink-0">⚠️</span>
+                  <div>
+                    <p className="font-bold">Automated Legal Analysis Notice</p>
+                    <p className="mt-0.5">{legalAnalysisWarning}</p>
                   </div>
                 </div>
+              )}
+
+              {/* Suggestion Cards */}
+              {legalSuggestions.length > 0 ? (
+                <div className="space-y-4">
+                  {legalSuggestions.map((sug, idx) => (
+                    <div
+                      key={sug.id || idx}
+                      className={`border rounded-xl p-5 transition-all shadow-sm ${
+                        sug.accepted
+                          ? 'bg-emerald-50/80 border-emerald-300'
+                          : sug.removed
+                          ? 'bg-gray-100/60 border-gray-200 opacity-60'
+                          : 'bg-white border-amber-200 hover:border-amber-400'
+                      }`}
+                    >
+                      {/* Card Header */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-gray-100">
+                        <div className="flex items-center gap-3">
+                          <span className="font-bold text-sm text-[#12335B] bg-[#12335B]/10 px-3 py-1 rounded-lg">
+                            {sug.act} — Section {sug.section}
+                          </span>
+                          <span className="font-bold text-sm text-gray-900">{sug.title}</span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {sug.accepted ? (
+                            <span className="text-xs font-bold text-emerald-800 bg-emerald-200 px-2.5 py-1 rounded-md border border-emerald-400">
+                              ✓ Accepted into FIR
+                            </span>
+                          ) : sug.removed ? (
+                            <span className="text-xs font-bold text-gray-600 bg-gray-200 px-2.5 py-1 rounded-md">
+                              ✗ Removed
+                            </span>
+                          ) : (
+                            <span className="text-xs font-bold text-amber-800 bg-amber-100 px-2.5 py-1 rounded-md border border-amber-300">
+                              {sug.status || 'Potentially Applicable BNS Provision — Officer Review Required'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Card Body */}
+                      {!sug.removed && (
+                        <div className="mt-4 space-y-3 text-xs leading-relaxed text-gray-700">
+                          {/* Why it may apply */}
+                          <div>
+                            <span className="font-bold text-[#12335B] block mb-0.5">Why this provision may apply:</span>
+                            <p className="bg-gray-50 p-2.5 rounded-lg border border-gray-100">{sug.why_it_may_apply}</p>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {/* Supporting Facts */}
+                            {sug.supporting_facts && sug.supporting_facts.length > 0 && (
+                              <div className="bg-emerald-50/50 p-3 rounded-lg border border-emerald-100">
+                                <span className="font-bold text-emerald-900 block mb-1">Supporting facts from incident:</span>
+                                <ul className="list-disc list-inside space-y-0.5 text-emerald-800">
+                                  {sug.supporting_facts.map((fact, fIdx) => (
+                                    <li key={fIdx}>{fact}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            {/* Uncertainty / Missing details */}
+                            {sug.uncertainty && sug.uncertainty.length > 0 && (
+                              <div className="bg-amber-50/50 p-3 rounded-lg border border-amber-100">
+                                <span className="font-bold text-amber-900 block mb-1">Uncertainty / Requires verification:</span>
+                                <ul className="list-disc list-inside space-y-0.5 text-amber-800">
+                                  {sug.uncertainty.map((unc, uIdx) => (
+                                    <li key={uIdx}>{unc}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Punishment & Grounding Source */}
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-gray-100 text-[11px] text-gray-500">
+                            <div>
+                              <span className="font-bold text-gray-700">Statutory Punishment: </span>
+                              <span>{sug.punishment}</span>
+                            </div>
+                            <div>
+                              <span className="font-bold text-gray-700">Source: </span>
+                              <span className="bg-gray-100 px-2 py-0.5 rounded text-gray-600 font-mono">{sug.grounding_source}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Card Action Controls */}
+                      <div className="mt-4 flex items-center justify-end gap-3 pt-3 border-t border-gray-100">
+                        {sug.accepted ? (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveSuggestion(idx)}
+                            className="px-3.5 py-1.5 rounded-lg border border-red-300 text-red-700 hover:bg-red-50 text-xs font-semibold transition"
+                          >
+                            Remove from FIR
+                          </button>
+                        ) : sug.removed ? (
+                          <button
+                            type="button"
+                            onClick={() => handleAcceptSuggestion(idx)}
+                            className="px-3.5 py-1.5 rounded-lg bg-[#12335B] text-white hover:bg-[#0d2949] text-xs font-semibold transition"
+                          >
+                            Re-accept Provision
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveSuggestion(idx)}
+                              className="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 hover:bg-gray-100 text-xs font-semibold transition"
+                            >
+                              [ Remove ]
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleAcceptSuggestion(idx)}
+                              className="px-5 py-2 rounded-xl bg-emerald-700 text-white hover:bg-emerald-800 text-xs font-bold transition shadow-sm flex items-center gap-1.5"
+                            >
+                              <span>✓</span> [ Accept ]
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                !legalAnalysisWarning && (
+                  <p className="text-xs text-gray-500 italic bg-gray-50 p-4 rounded-xl text-center border border-gray-200">
+                    No automated BNS provisions suggested for this incident. You can manually add Acts & Sections using the <strong>+ Add Act / Section</strong> button in the form below.
+                  </p>
+                )
               )}
             </section>
           )}

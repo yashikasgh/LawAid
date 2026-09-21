@@ -29,7 +29,7 @@ app.middleware("http")(audit_log_middleware)
 from fastapi import APIRouter
 api_router = APIRouter(prefix="/api")
 
-for _r in [auth.router, fir.router, police.router, chat.router, complaints.router, fir_drafts.router]:
+for _r in [auth.router, fir_drafts.router, fir.router, police.router, chat.router, complaints.router]:
     api_router.include_router(_r)
     app.include_router(_r)
 

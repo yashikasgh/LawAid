@@ -163,8 +163,13 @@ def _extract_factual_heuristics(
 
     # 4. Stolen property extraction
     prop_str = "N/A"
+    val_str = "Unknown"
     lower_text = text.lower()
-    if "phone" in lower_text or "mobile" in lower_text:
+    
+    m_prop = re.search(r'\b(?:stolen|took|grabbed|snatched)?\s*([a-z0-9\s,-]+?(?:phone|mobile|smartphone|wallet|purse|vehicle|motorcycle|car|watch|laptop|chain|jewellery|jewelry|gold|cash))\b', text, re.I)
+    if m_prop:
+        prop_str = m_prop.group(0).strip()
+    elif "phone" in lower_text or "mobile" in lower_text:
         prop_str = "One mobile phone"
     elif "wallet" in lower_text or "purse" in lower_text:
         prop_str = "One wallet/purse"
@@ -172,6 +177,10 @@ def _extract_factual_heuristics(
         prop_str = "Vehicle"
     elif "stole" in lower_text or "took" in lower_text:
         prop_str = "Stolen property"
+
+    m_val = re.search(r'(?:₹|rs\.?|rupees)\s*([\d,]+)', text, re.I)
+    if m_val:
+        val_str = f"₹{m_val.group(1)}"
 
     # 5. Accused details extraction
     accused_str = "Unknown accused person(s)"
@@ -186,6 +195,7 @@ def _extract_factual_heuristics(
         "time": time_str,
         "location": loc_str,
         "property": prop_str,
+        "value": val_str,
         "accused": accused_str
     }
 
@@ -213,32 +223,9 @@ def generate_structured_fir(
     if llm_client is None:
         llm_client = MultiProviderLLMFailoverClient()
 
-    # Extract ONLY supported BNS section numbers from grounded analysis
-    raw_supported_sections = []
-    for item in grounded_analysis:
-        if item.get("applicability") == "supported":
-            sec_num = str(item.get("section", "")).strip()
-            m = re.search(r'\d+', sec_num)
-            clean_sec = m.group(0) if m else sec_num
-            if clean_sec and clean_sec not in raw_supported_sections:
-                raw_supported_sections.append(clean_sec)
-
-    if raw_supported_sections:
-        acts_sections_grounded = [
-            {
-                "act": "Bharatiya Nyaya Sanhita, 2023",
-                "sections": sec
-            }
-            for sec in raw_supported_sections
-        ]
-    else:
-        # Zero grounded provisions from RAG — NEVER emit "Under Investigation"
-        acts_sections_grounded = [
-            {
-                "act": "Bharatiya Nyaya Sanhita, 2023",
-                "sections": "Not provided"
-            }
-        ]
+    # BNS provisions are presented as grounded suggestions for officer review and explicit acceptance.
+    # Do NOT automatically force sections into FIR form fields.
+    acts_sections_grounded = []
 
     prompt = (
         "You are LawAid's official Police AI FIR Generation Assistant.\n"
@@ -248,10 +235,9 @@ def generate_structured_fir(
         "2. NEVER invent or fabricate names, dates, times, addresses, police stations, districts, accused identities, property values, weapons, or injuries that were not explicitly stated.\n"
         "3. For unstated or missing facts, use 'Not provided', 'Unknown', or 'N/A' as defined in the JSON schema. Do NOT fabricate fake names, GD numbers, beat numbers, or officer details.\n"
         "4. If the incident mentions property taken (e.g. mobile phone), put it in 'property_details' (e.g. 'One mobile phone'). Do NOT say 'N/A' if property was stolen.\n"
-        "5. In the 'acts_sections' array, output the grounded sections provided below. If no section is provided, use 'Not provided'. NEVER output 'Under Investigation'.\n"
+        "5. The 'acts_sections' field in the FIR JSON should be an empty list []. BNS provisions will be selected separately by the reviewing police officer.\n"
         "6. The 'fir_contents' field must be a formal, detailed narrative statement of the incident, strictly faithful to the provided text.\n"
         "7. Output ONLY valid JSON matching the exact schema below without markdown framing or commentary.\n\n"
-        f"GROUNDED BNS SECTIONS:\n{json.dumps(acts_sections_grounded, indent=2)}\n\n"
         f"INCIDENT STATEMENT:\n{sanitized_incident}\n\n"
         "JSON OUTPUT SCHEMA:\n"
         f"{json.dumps(STRUCTURED_FIR_SCHEMA, indent=2)}\n"
@@ -259,7 +245,7 @@ def generate_structured_fir(
 
     fir_data = {}
     try:
-        raw_out = llm_client.generate(prompt, max_tokens=700, workload=Workload.POLICE_FIR_DRAFT)
+        raw_out = llm_client.generate(prompt, max_tokens=1500, workload=Workload.POLICE_FIR_DRAFT)
         cleaned = raw_out.strip()
         if cleaned.startswith("```json"):
             cleaned = cleaned[7:]
@@ -288,7 +274,7 @@ def generate_structured_fir(
             "year": "2026",
             "fir_number": "Draft",
             "fir_date": fir_date_val,
-            "acts_sections": acts_sections_grounded,
+            "acts_sections": [],
             "occurrence": {
                 "day": heuristics["day"],
                 "date": heuristics["date"],
@@ -320,7 +306,7 @@ def generate_structured_fir(
             "accused_details": heuristics["accused"],
             "delay_reason": "Not provided",
             "property_details": heuristics["property"],
-            "property_value": "Unknown",
+            "property_value": heuristics.get("value", "Unknown"),
             "inquest_ud_case": "N/A",
             "fir_contents": sanitized_incident,
             "action_taken": "Registered the case and took up the investigation",
@@ -329,8 +315,8 @@ def generate_structured_fir(
             "dispatch_to_court": {"date": "To be dispatched", "time": "To be dispatched"}
         }
     else:
-        # Enforce grounded acts_sections strictly (never allow 'Under Investigation')
-        fir_data["acts_sections"] = acts_sections_grounded
+        # Keep acts_sections empty by default until officer review & explicit acceptance
+        fir_data["acts_sections"] = []
 
         # Post-process occurrence fields if LLM emitted 'Not provided' or empty
         if isinstance(fir_data.get("occurrence"), dict):

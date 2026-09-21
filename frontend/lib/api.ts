@@ -7,10 +7,32 @@ export const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
+function getClientToken(): string | null {
+  if (typeof window === 'undefined') return null
+
+  // 1. Try localStorage keys
+  const localToken = localStorage.getItem('lawaid_token') || localStorage.getItem('access_token')
+  if (localToken && localToken.trim()) return localToken.trim()
+
+  // 2. Fallback to document.cookie (lawaid_token)
+  if (typeof document !== 'undefined' && document.cookie) {
+    const match = document.cookie.match(/(?:^|;\s*)lawaid_token=([^;]*)/)
+    if (match && match[1]) {
+      const cookieToken = decodeURIComponent(match[1]).trim()
+      if (cookieToken) {
+        localStorage.setItem('lawaid_token', cookieToken)
+        return cookieToken
+      }
+    }
+  }
+
+  return null
+}
+
 // Automatically attach the login token to every request
 api.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
-    const token = localStorage.getItem('lawaid_token')
+    const token = getClientToken()
     if (token) config.headers.Authorization = `Bearer ${token}`
   }
   return config
@@ -110,3 +132,12 @@ export const policeAPI = {
   approveFir: (draftId: string) =>
     api.post('/police/approve-fir', { fir_draft_id: draftId }),
 }
+
+// ── FIR Drafts ──────────────────────────────────────────────
+export const firDraftsAPI = {
+  saveDraft: (payload: any) => api.post('/fir/drafts', payload),
+  getDrafts: () => api.get('/fir/drafts'),
+  getDraft: (draftId: string) => api.get(`/fir/drafts/${draftId}`),
+  deleteDraft: (draftId: string) => api.delete(`/fir/drafts/${draftId}`),
+}
+

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import Navbar from '@/components/Navbar'
 import { getStoredUser } from '@/lib/auth'
+import { firDraftsAPI } from '@/lib/api'
 
 export default function PoliceDashboard() {
   const [user, setUser] = useState<ReturnType<typeof getStoredUser>>(null)
@@ -232,16 +233,33 @@ function DraftsList() {
   useEffect(() => {
     async function loadDrafts() {
       try {
-        const token = localStorage.getItem("access_token")
-        const res = await fetch("http://localhost:8000/api/fir/drafts", {
-          headers: { "Authorization": `Bearer ${token}` }
-        })
-        if (res.ok) {
-          const data = await res.json()
-          setDrafts(data)
+        const res = await firDraftsAPI.getDrafts()
+        if (res.data && Array.isArray(res.data) && res.data.length > 0) {
+          setDrafts(res.data)
+        } else {
+          const saved = sessionStorage.getItem('lawaid_fir_draft')
+          if (saved) {
+            try {
+              const parsed = JSON.parse(saved)
+              const draftId = sessionStorage.getItem('lawaid_draft_id') || 'session_draft'
+              setDrafts([{ ...parsed, draft_id: draftId, updated_at: parsed.updated_at || new Date().toISOString() }])
+            } catch (e) {
+              console.error('Failed to parse local session draft:', e)
+            }
+          }
         }
       } catch (e) {
-        console.error("Failed to load drafts", e)
+        console.error("Failed to load drafts from backend, checking session storage", e)
+        const saved = sessionStorage.getItem('lawaid_fir_draft')
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved)
+            const draftId = sessionStorage.getItem('lawaid_draft_id') || 'session_draft'
+            setDrafts([{ ...parsed, draft_id: draftId, updated_at: parsed.updated_at || new Date().toISOString() }])
+          } catch (err) {
+            console.error('Failed to parse local session draft:', err)
+          }
+        }
       } finally {
         setLoading(false)
       }
@@ -257,23 +275,32 @@ function DraftsList() {
     <div className="mt-8">
       <h3 className="font-serif text-[24px] font-semibold text-[#12335B] mb-4">Recent Drafts</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {drafts.map(d => (
-          <div key={d.draft_id} className="bg-white/80 border border-gray-200 p-4 rounded-xl shadow-sm">
-            <h4 className="font-bold text-[#12335B] mb-1">Draft FIR</h4>
-            <p className="text-sm text-gray-600 truncate mb-2">{d.statement?.substring(0, 80) || "No statement"}</p>
-            <p className="text-xs text-gray-400 mb-3">Updated: {new Date(d.updated_at).toLocaleString()}</p>
-            <Link 
-              href="/police/new-fir"
-              onClick={() => {
-                sessionStorage.setItem("lawaid_draft_id", d.draft_id)
-                sessionStorage.setItem("lawaid_fir_draft", JSON.stringify(d))
-              }}
-              className="text-sm font-semibold text-[#b98528] hover:underline"
-            >
-              Resume Draft ?
-            </Link>
-          </div>
-        ))}
+        {drafts.map(d => {
+          const summaryText = d.statement || d.firContents || d.fir_contents || "No statement"
+          return (
+            <div key={d.draft_id || d.firNo} className="bg-white/80 border border-gray-200 p-4 rounded-xl shadow-sm">
+              <h4 className="font-bold text-[#12335B] mb-1">Draft FIR</h4>
+              <p className="text-sm text-gray-600 truncate mb-2">{summaryText.substring(0, 80)}</p>
+              <p className="text-xs text-gray-400 mb-3">
+                Updated: {d.updated_at ? new Date(d.updated_at).toLocaleString() : 'Recently saved'}
+              </p>
+              <Link 
+                href="/police/new-fir"
+                onClick={() => {
+                  if (d.draft_id && d.draft_id !== 'session_draft') {
+                    sessionStorage.setItem("lawaid_draft_id", d.draft_id)
+                  }
+                  const serialized = JSON.stringify(d)
+                  sessionStorage.setItem("lawaid_fir_draft", serialized)
+                  localStorage.setItem("lawaid_fir_draft", serialized)
+                }}
+                className="text-sm font-semibold text-[#b98528] hover:underline"
+              >
+                Resume Draft →
+              </Link>
+            </div>
+          )
+        })}
       </div>
     </div>
   )

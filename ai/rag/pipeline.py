@@ -432,13 +432,18 @@ def run_pipeline(
 
 def sanitize_and_validate_legal_chat_reply(bot_reply: str, structured_chat_context: list) -> str:
     """
-    Automated final-response normalizer & contradiction fixer.
+    Automated final-response normalizer & contradiction fixer for Legal Assistant.
     Enforces status-explanation consistency, statutory element correctness,
-    statutory punishment maximum safeguards, and bottom-line summary consistency.
+    conditional legal language (prevents definitive 'established' claims for AI suggestions),
+    removes parenthetical heading notes, and enforces statutory punishment maximum safeguards.
     """
     import re
     if not bot_reply or not isinstance(bot_reply, str):
         return bot_reply
+
+    # 0. Clean Section Headings: Remove parenthetical limit notes like '(just one here)'
+    bot_reply = re.sub(r'###\s*2\.\s*Applicable\s+sections\s*\([^\)]*\)', '### 2. Relevant provision(s)', bot_reply, flags=re.IGNORECASE)
+    bot_reply = re.sub(r'Applicable\s+sections\s*\([^\)]*\)', 'Relevant provision(s)', bot_reply, flags=re.IGNORECASE)
 
     # Build section applicability map (section_num -> applicability)
     sec_app_map = {}
@@ -448,17 +453,37 @@ def sanitize_and_validate_legal_chat_reply(bot_reply: str, structured_chat_conte
         if s_raw:
             sec_app_map[s_raw] = app
 
-    # 1. Normalize Section Headings & Tags for Conditional Provisions
-    for sec, app in sec_app_map.items():
-        if app in ["potentially_applicable", "uncertain", "insufficient_information", "not_supported"]:
-            pattern_est = re.compile(
-                r'(\*\*?(?:BNS\s+)?Section\s+' + re.escape(sec) + r'\b[^\*\n]*\*\*?\s*[\—\:\-]\s*)\*?(?:Established|Facts?\s+establish[^\*\n]*)\*?',
-                re.IGNORECASE
-            )
-            bot_reply = pattern_est.sub(r'\1*Potentially Applicable (Material Fact Missing)*', bot_reply)
+    # 1. Normalize Section Headings, Table Statuses & Definitive Claims to Conditional Language
+    # Replace table/heading Status | Established | with | Potentially Applicable |
+    bot_reply = re.sub(r'\|\s*Established\s*\|', '| Potentially Applicable |', bot_reply, flags=re.IGNORECASE)
+    bot_reply = re.sub(r'\bStatus:\s*Established\b', 'Status: Potentially Applicable', bot_reply, flags=re.IGNORECASE)
 
-            p_body = re.compile(r'\bFacts?\s+establish(?:es)?\s+(?:BNS\s+)?Section\s+' + re.escape(sec) + r'\b', re.IGNORECASE)
-            bot_reply = p_body.sub(f'Section {sec} may be applicable depending on missing details', bot_reply)
+    # Replace definitive claims of established offences with conditional wording (Requirement 3)
+    bot_reply = re.sub(
+        r'\b(?:this provision is|is hereby|is)\s+established\s+based\s+on\s+the\s+facts\s+you\s+shared\b',
+        'the facts described appear consistent with this provision, so it may be relevant. Whether the offence is legally established depends on the complete facts, evidence, and applicable legal process',
+        bot_reply,
+        flags=re.IGNORECASE
+    )
+    bot_reply = re.sub(
+        r'\bFacts?\s+establish(?:es)?\s+(?:BNS\s+)?Section\s+(\d+[A-Za-z]?)\b',
+        r'The facts described appear consistent with the elements of BNS Section \1, so this provision may be relevant. Whether the offence is legally established depends on the complete facts, evidence, and applicable legal process',
+        bot_reply,
+        flags=re.IGNORECASE
+    )
+    bot_reply = re.sub(
+        r'\bSection\s+(\d+[A-Za-z]?)\s+is\s+established\b',
+        r'BNS Section \1 appears consistent with the stated facts (legal establishment depends on complete evidence and legal process)',
+        bot_reply,
+        flags=re.IGNORECASE
+    )
+
+    for sec in sec_app_map.keys():
+        pattern_est = re.compile(
+            r'(\*\*?(?:BNS\s+)?Section\s+' + re.escape(sec) + r'\b[^\*\n]*\*\*?\s*[\—\:\-]\s*)\*?(?:Established|Facts?\s+establish[^\*\n]*)\*?',
+            re.IGNORECASE
+        )
+        bot_reply = pattern_est.sub(r'\1*Potentially Applicable*', bot_reply)
 
     # 2. Statutory Element Overrides
     if "130" in sec_app_map and sec_app_map["130"] != "established":
@@ -487,23 +512,20 @@ def sanitize_and_validate_legal_chat_reply(bot_reply: str, structured_chat_conte
         bl_header = bottom_line_match.group(1)
         bl_body = bottom_line_match.group(2).strip()
 
-        conditional_secs = [s for s, a in sec_app_map.items() if a in ["potentially_applicable", "uncertain", "insufficient_information"]]
-        has_contradiction = False
-
-        for c_sec in conditional_secs:
-            if re.search(r'\b(?:most likely|clearly applies|is established|definitely fits)\b[^\.\n]*?\bSection\s+' + re.escape(c_sec) + r'\b', bl_body, re.IGNORECASE):
-                has_contradiction = True
+        has_definitive = False
+        for sec in sec_app_map.keys():
+            if re.search(r'\b(?:most likely|clearly applies|is established|definitely fits)\b[^\.\n]*?\bSection\s+' + re.escape(sec) + r'\b', bl_body, re.IGNORECASE):
+                has_definitive = True
                 break
-            if re.search(r'\bSection\s+' + re.escape(c_sec) + r'\b[^\.\n]*?\b(?:is established|clearly applies|is the main charge)\b', bl_body, re.IGNORECASE):
-                has_contradiction = True
+            if re.search(r'\bSection\s+' + re.escape(sec) + r'\b[^\.\n]*?\b(?:is established|clearly applies|is the main charge)\b', bl_body, re.IGNORECASE):
+                has_definitive = True
                 break
 
-        if has_contradiction:
-            cond_str = ", ".join([f"Section {s}" for s in conditional_secs])
+        if has_definitive:
+            secs_str = ", ".join([f"Section {s}" for s in sec_app_map.keys()])
             new_bl_body = (
-                f"Because specific details remain unstated, candidate provisions like {cond_str} remain "
-                "potentially applicable. No legal section can be established as a final conclusion until these "
-                "missing statutory elements are investigated and confirmed."
+                f"The facts described appear consistent with candidate provisions like {secs_str}, so these provisions "
+                "may be relevant. Whether an offence is legally established depends on complete facts, evidence, and applicable legal process."
             )
             bot_reply = bot_reply[:bottom_line_match.start()] + bl_header + new_bl_body
 
@@ -667,7 +689,7 @@ def run_chat_pipeline(
             "act_name": sec_info.get("act_name", ""),
             "section": f"{act_code} Section {sec}",
             "title": clean_title,
-            "overall_applicability": app,
+            "overall_applicability": "potentially_applicable" if app in ["supported", "established"] else app,
             "statutory_punishment_details": {
                 "punishment": sec_info.get("punishment"),
                 "bailable": sec_info.get("bailable"),
@@ -700,14 +722,16 @@ def run_chat_pipeline(
         "     * NEVER state 1–5 years RI as the ordinary punishment for simple theft.\n"
         "8. Refer to BNS sections strictly as 'Section <number>' or 'BNS Section <number>' (e.g., Section 303, Section 329). NEVER mention IPC sections.\n"
         "9. Expand BNS strictly as 'Bharatiya Nyaya Sanhita, 2023' and BNSS strictly as 'Bharatiya Nagarik Suraksha Sanhita, 2023'.\n"
-        "10. STRICT GROUNDING STATUS & EXPLANATION MATCHING (FOUR GENERALIZED STATES):\n"
-        "    - ESTABLISHED: Label a section as 'Established' or 'Facts establish this provision' ONLY when the stated facts satisfy ALL mandatory statutory elements without requiring further confirmation or unstated facts. IF YOU STATE THAT FACTS ARE NEEDED OR STATUTORY INTENT/PURPOSE STILL NEEDS CONFIRMATION, YOU MUST NOT LABEL THE PROVISION AS ESTABLISHED.\n"
-        "    - POTENTIALLY APPLICABLE — MATERIAL FACT MISSING: Label a section as 'Potentially Applicable' when some elements fit, but specific material statutory facts (e.g. carrying/wearing property for §134, lurking/concealment for §331, manner of force/fear for §309) are unstated. State specifically what fact is missing.\n"
-        "    - NOT SUPPORTED: Label as 'Not Supported' when stated facts contradict or fail required statutory elements.\n"
-        "    - INSUFFICIENT INFORMATION: Label as 'Insufficient Information' when key facts are unstated so applicability cannot be evaluated.\n"
+        "10. STRICT LEGAL ASSISTANT STATUS & CONDITIONAL LANGUAGE RULES:\n"
+        "    - NEVER label a section as 'Established' or claim that an offence is legally established or proven. An AI assistant must never conclude that an offence is established merely because the described facts appear consistent with statutory elements.\n"
+        "    - Label provisions as 'Potentially Applicable' or 'Appears Consistent with Stated Facts'.\n"
+        "    - PREFERRED CONDITIONAL WORDING: 'The facts described appear consistent with the elements of BNS Section <number> (<Title>), so this provision may be relevant. Whether the offence is legally established depends on the complete facts, evidence, and applicable legal process.'\n"
+        "    - Label as 'Not Supported' when stated facts contradict required statutory elements.\n"
+        "    - Label as 'Insufficient Information' when key facts are unstated so applicability cannot be evaluated.\n"
         "11. GUIDED & INTERACTIVE RESPONSE STRUCTURE & BOTTOM-LINE CONSISTENCY:\n"
-        "    - Structure your answer using clean Markdown headings, tables, and bullet points: (1) What the law says about your situation, (2) Applicable sections (format as a Markdown table with exact columns: Section | Provision | Why it may/may not apply | Status), (3) Punishments and statutory conditions, (4) What we don't know yet & what details would help, (5) What you can do next (safety advice: 'Do not make a ransom payment or agree to demands on your own. Contact the police immediately and follow their guidance while preserving any messages or evidence. Tell the police about any immediate safety risk and ask what protection or other urgent measures are available in your circumstances'), and (6) Bottom line summary.\n"
-        "    - BOTTOM-LINE CONSISTENCY RULE: The bottom line summary MUST be generated strictly from the grounded provision states. Any provision that is conditional/uncertain (§309, §134, §331, etc.) MUST remain conditional in the bottom line. ONLY provisions that are fully established by stated facts may be summarized as established.\n"
+        "    - Structure your answer using clean Markdown headings, tables, and bullet points: (1) What the law says about your situation, (2) Relevant provision(s) (format as a Markdown table with exact columns: Section | Provision | Why it may/may not apply | Status), (3) Punishments and statutory conditions, (4) What we don't know yet & what details would help, (5) What you can do next (safety advice: 'Do not make a ransom payment or agree to demands on your own. Contact the police immediately and follow their guidance while preserving any messages or evidence. Tell the police about any immediate safety risk and ask what protection or other urgent measures are available in your circumstances'), and (6) Bottom line summary.\n"
+        "    - SECTION HEADING RULE: Use heading '### 2. Relevant provision(s)' or '### 2. Applicable sections'. NEVER add parenthetical limit notes like '(just one here)' or '(only one section)' to any heading.\n"
+        "    - BOTTOM-LINE CONSISTENCY RULE: The bottom line summary MUST remain conditional. Describe provisions as potentially applicable or consistent with stated facts, and state clearly that legal establishment depends on complete facts, evidence, and official legal investigation.\n"
         "12. RETRIEVAL SYNTHESIS & STATUTORY ACCURACY:\n"
         "    - When multiple retrieved clauses/branches concern the same section, synthesize them into a clear rule. Remove duplication and do not dump every branch into the user response.\n"
         "    - Statutory elements must control language: compare mandatory statutory elements against explicitly stated facts without assuming unstated facts or replacing statutory terms with vague shortcuts.\n"

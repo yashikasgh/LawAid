@@ -329,45 +329,120 @@ class RenderFIRPDFRequest(BaseModel):
 def generate_fir(body: GenerateFIRRequest, current_user: User = Depends(require_role("police"))):
     """
     Executes the end-to-end AI FIR Generation workflow for Police Officers.
-    Runs grounded LawAid RAG pipeline, extracts supported BNS sections,
+    Runs grounded LawAid RAG pipeline with full legal analysis, extracts grounded BNS suggestions,
+    presents suggestions for officer review (without auto-populating sections),
     generates structured IF1 FIR JSON, and renders overlay on official IF1 PDF template.
     """
     import base64
     from ai.rag.pipeline import run_pipeline
+    from ai.rag.analysis.legal_analyzer import Workload
     from ai.fir_engine.fir_ai_generator import generate_structured_fir
+    from ai.fir_engine.fir_pdf_generator import generate_fir_pdf
+
     incident_text = (body.incident or "").strip()
     if len(incident_text) < 10:
         raise HTTPException(status_code=400, detail="Incident description must contain at least 10 characters.")
 
-    # 1. Run grounded RAG pipeline fast-path (NER, retrieval, reranking, without heavy legal-analysis LLM)
+    # 1. Run full grounded RAG legal analysis pipeline for Police FIR workload
     try:
-        pipeline_res = run_pipeline(raw_incident=incident_text, skip_llm_analysis=True)
-    except TypeError:
-        pipeline_res = run_pipeline(raw_incident=incident_text)
+        pipeline_res = run_pipeline(raw_incident=incident_text, workload=Workload.POLICE_FIR_DRAFT)
+    except Exception as e:
+        print(f"[Generate FIR Pipeline Error] {e}")
+        pipeline_res = {"status": "error", "source": "error", "analysis": []}
 
     sanitized_incident = pipeline_res.get("sanitized_incident", incident_text)
     grounded_analysis = pipeline_res.get("analysis", [])
+    pipeline_source = pipeline_res.get("source", "pipeline")
+    pipeline_status = pipeline_res.get("status", "success")
 
-    # 2. Extract supported BNS section titles
+    legal_suggestions = []
     supported_sections = []
-    for item in grounded_analysis:
-        if item.get("applicability") == "supported":
-            sec_num = str(item.get("section", "")).strip()
-            title = str(item.get("title", "")).strip()
-            if sec_num:
-                label = f"BNS Section {sec_num}" if not sec_num.lower().startswith("section") else sec_num
-                if title:
-                    label += f" ({title})"
-                if label not in supported_sections:
-                    supported_sections.append(label)
+    legal_analysis_warning = ""
 
-    # 3. Generate structured IF1 FIR JSON
+    # Handle legal analysis provider failure / fallback mode per requirement 9
+    if pipeline_source == "retrieval_fallback" or pipeline_status == "analysis_unavailable" or not grounded_analysis:
+        legal_analysis_warning = (
+            "Automated legal analysis is currently unavailable. No BNS provision was automatically accepted. "
+            "Please review/add sections manually."
+        )
+        legal_suggestions = []
+    else:
+        # Build structured BNS suggestions for officer review — DO NOT SLICE OR CAP THE RESULT ARRAY (Requirement 2)
+        for idx, item in enumerate(grounded_analysis):
+            sec_num = str(item.get("section", "")).strip()
+            if not sec_num:
+                continue
+
+            title = str(item.get("title", "")).strip() or str(item.get("offence_type", "")).strip() or f"Section {sec_num}"
+            act_name = item.get("act_name") or "Bharatiya Nyaya Sanhita, 2023"
+
+            reasoning = item.get("reasoning") or item.get("explanation") or "Factual attributes match statutory element definitions."
+
+            # Supporting facts
+            supporting_facts = []
+            prereqs = item.get("prerequisite_evidence", [])
+            if isinstance(prereqs, list):
+                for p in prereqs:
+                    if isinstance(p, dict) and p.get("evidence_status") == "satisfied":
+                        ev = p.get("incident_evidence") or p.get("requirement")
+                        if ev and ev not in supporting_facts:
+                            supporting_facts.append(ev)
+            if not supporting_facts:
+                sat_elems = item.get("satisfied_elements", [])
+                if isinstance(sat_elems, list):
+                    supporting_facts = [str(x) for x in sat_elems if x]
+            if not supporting_facts:
+                supporting_facts = ["Factual attributes in incident statement matched retrieved statutory elements."]
+
+            # Uncertainty / missing information
+            uncertainty = []
+            if isinstance(prereqs, list):
+                for p in prereqs:
+                    if isinstance(p, dict) and p.get("evidence_status") in ["missing", "contradicted"]:
+                        req = p.get("requirement")
+                        reason = p.get("reason")
+                        msg = f"{req}: {reason}" if req and reason else (req or reason)
+                        if msg and msg not in uncertainty:
+                            uncertainty.append(msg)
+            if not uncertainty:
+                miss_elems = item.get("missing_elements", [])
+                if isinstance(miss_elems, list):
+                    uncertainty = [f"Missing factual confirmation: {x}" for x in miss_elems if x]
+            if not uncertainty:
+                uncertainty = ["Officer verification required for statutory element confirmation."]
+
+            punishment = item.get("punishment") or "Statutory punishment as per BNS Schedule 1."
+            app_status = item.get("applicability", "uncertain")
+
+            status_label = "Potentially Applicable BNS Provision — Officer Review Required" if app_status == "uncertain" else "AI-Suggested BNS Provision — Officer Review Required"
+
+            label = f"BNS Section {sec_num}" if not sec_num.lower().startswith("section") else sec_num
+            if title:
+                label += f" ({title})"
+            if label not in supported_sections:
+                supported_sections.append(label)
+
+            legal_suggestions.append({
+                "id": f"sug_{sec_num}_{idx}",
+                "section": sec_num,
+                "title": title,
+                "act": act_name,
+                "why_it_may_apply": reasoning,
+                "supporting_facts": supporting_facts,
+                "uncertainty": uncertainty,
+                "punishment": punishment,
+                "grounding_source": f"Grounded LawAid RAG Analysis ({item.get('unit_type', 'core_definition')})",
+                "status": status_label,
+                "applicability": app_status
+            })
+
+    # 2. Generate structured IF1 FIR non-legal JSON (acts_sections stays [] until officer accepts suggestions)
     fir_data = generate_structured_fir(
         sanitized_incident=sanitized_incident,
         grounded_analysis=grounded_analysis
     )
 
-    # 4. Render overlay on official IF1 PDF template
+    # 3. Render overlay on official IF1 PDF template
     pdf_bytes = b""
     try:
         pdf_bytes = generate_fir_pdf(fir_data)
@@ -380,6 +455,8 @@ def generate_fir(body: GenerateFIRRequest, current_user: User = Depends(require_
         "status": "ok",
         "sanitized_incident": sanitized_incident,
         "fir_data": fir_data,
+        "legal_suggestions": legal_suggestions,
+        "legal_analysis_warning": legal_analysis_warning,
         "supported_sections": supported_sections,
         "pdf_base64": pdf_base64
     }
