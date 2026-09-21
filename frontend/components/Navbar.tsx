@@ -31,7 +31,7 @@ export default function Navbar() {
         ? [
             { href: '/', label: 'Home' },
             { href: '/police', label: 'Police' },
-            { href: '/police/new-fir', label: 'Draft FIR' },
+            { href: '/police/new-fir?mode=new', label: 'Draft FIR' },
             { href: '/bns-search', label: 'BNS Search' },
           ]
         : [
@@ -81,7 +81,18 @@ export default function Navbar() {
           <Link
             key={l.href}
             href={l.href}
-            onClick={l.href === '/' ? handleHomeClick : undefined}
+            onClick={(e) => {
+              if (l.href === '/') {
+                handleHomeClick(e)
+              } else if (l.href.includes('/police/new-fir')) {
+                if (typeof window !== 'undefined') {
+                  sessionStorage.setItem('lawaid_fir_mode', 'new')
+                  sessionStorage.removeItem('lawaid_fir_draft')
+                  sessionStorage.removeItem('lawaid_draft_id')
+                  localStorage.removeItem('lawaid_fir_draft')
+                }
+              }
+            }}
             className={`text-sm font-medium hover:text-gold transition ${
               path === l.href
                 ? 'text-gold border-b-2 border-gold'

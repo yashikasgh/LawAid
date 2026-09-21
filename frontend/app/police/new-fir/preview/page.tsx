@@ -152,7 +152,8 @@ const blob = new Blob([pdfBuffer], {
             </p>
 
             <Link
-              href="/police/new-fir"
+              href="/police/new-fir?mode=resume"
+              onClick={() => sessionStorage.setItem('lawaid_fir_mode', 'resume')}
               className="inline-block mt-6 bg-[#12335B] hover:bg-[#0d2949] text-white px-5 py-2.5 rounded-lg font-semibold transition"
             >
               Back to FIR Drafting
@@ -171,7 +172,8 @@ const blob = new Blob([pdfBuffer], {
         {/* Top controls */}
         <div className="print:hidden max-w-6xl mx-auto mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <Link
-            href="/police/new-fir"
+            href="/police/new-fir?mode=resume"
+            onClick={() => sessionStorage.setItem('lawaid_fir_mode', 'resume')}
             className="border border-[#12335B] text-[#12335B] bg-white hover:bg-[#12335B]/5 px-5 py-2.5 rounded-xl text-xs font-semibold shadow-sm transition flex items-center gap-2"
           >
             ← Edit Draft

@@ -484,30 +484,69 @@ export default function NewFIRPage() {
         setSpeechSupported(false)
       }
 
-      const saved = sessionStorage.getItem('lawaid_fir_draft') || localStorage.getItem('lawaid_fir_draft')
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved)
-          if (parsed.statement) setStatement(parsed.statement)
-          if (parsed.legalSuggestions) setLegalSuggestions(parsed.legalSuggestions)
-          if (parsed.legalAnalysisWarning) setLegalAnalysisWarning(parsed.legalAnalysisWarning)
-          if (parsed.supportedSections) setSupportedSections(parsed.supportedSections)
-          if (parsed.verifiedByOfficer !== undefined) setVerifiedByOfficer(parsed.verifiedByOfficer)
+      const params = new URLSearchParams(window.location.search)
+      const modeParam = params.get('mode')
+      const draftIdParam = params.get('draft_id')
 
-          const derivedEntries = deriveActEntries(parsed.actEntries || [], parsed.legalSuggestions || [])
-          const syncedForm = getSynchronizedForm({
-            ...parsed,
-            actEntries: derivedEntries,
-          })
-          setForm((prev) => ({
-            ...prev,
-            ...syncedForm,
-          }))
-          setDraftGenerated(true)
-        } catch (e) {
-          console.error('Failed to parse saved draft:', e)
+      // 1. NEW MODE: Explicit mode=new OR fresh navigation without mode/draft_id
+      if (modeParam === 'new' || (!modeParam && !draftIdParam && sessionStorage.getItem('lawaid_fir_mode') !== 'resume')) {
+        sessionStorage.removeItem('lawaid_fir_draft')
+        sessionStorage.removeItem('lawaid_draft_id')
+        localStorage.removeItem('lawaid_fir_draft')
+        sessionStorage.setItem('lawaid_fir_mode', 'new')
+
+        setStatement('')
+        setForm(initialForm)
+        setLegalSuggestions([])
+        setLegalAnalysisWarning('')
+        setSupportedSections([])
+        setVerifiedByOfficer(false)
+        setDraftGenerated(false)
+        return
+      }
+
+      // 2. RESUME MODE: Explicit mode=resume OR draft_id parameter OR lawaid_fir_mode === 'resume'
+      if (modeParam === 'resume' || draftIdParam || sessionStorage.getItem('lawaid_fir_mode') === 'resume') {
+        const saved = sessionStorage.getItem('lawaid_fir_draft') || localStorage.getItem('lawaid_fir_draft')
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved)
+            setStatement(parsed.statement || '')
+            setLegalSuggestions(parsed.legalSuggestions || [])
+            setLegalAnalysisWarning(parsed.legalAnalysisWarning || '')
+            setSupportedSections(parsed.supportedSections || [])
+            setVerifiedByOfficer(!!parsed.verifiedByOfficer)
+
+            const derivedEntries = deriveActEntries(parsed.actEntries || [], parsed.legalSuggestions || [])
+            const syncedForm = getSynchronizedForm({
+              ...parsed,
+              actEntries: derivedEntries,
+            })
+            setForm((prev) => ({
+              ...prev,
+              ...syncedForm,
+            }))
+            setDraftGenerated(true)
+            sessionStorage.setItem('lawaid_fir_mode', 'resume')
+            return
+          } catch (e) {
+            console.error('Failed to parse saved draft:', e)
+          }
         }
       }
+
+      // 3. Fallback: Blank defaults
+      sessionStorage.removeItem('lawaid_fir_draft')
+      sessionStorage.removeItem('lawaid_draft_id')
+      localStorage.removeItem('lawaid_fir_draft')
+      sessionStorage.setItem('lawaid_fir_mode', 'new')
+      setStatement('')
+      setForm(initialForm)
+      setLegalSuggestions([])
+      setLegalAnalysisWarning('')
+      setSupportedSections([])
+      setVerifiedByOfficer(false)
+      setDraftGenerated(false)
     }
   }, [])
 
@@ -750,7 +789,7 @@ export default function NewFIRPage() {
       verifiedByOfficer,
     }
     
-    // Fallback to session storage just in case
+    sessionStorage.setItem('lawaid_fir_mode', 'resume')
     sessionStorage.setItem('lawaid_fir_draft', JSON.stringify(draftPayload))
     
     try {
@@ -775,11 +814,16 @@ export default function NewFIRPage() {
 
   function generatePreview() {
     const syncedForm = getSynchronizedForm(form)
+    sessionStorage.setItem('lawaid_fir_mode', 'resume')
     sessionStorage.setItem(
       'lawaid_fir_draft',
       JSON.stringify({
         ...syncedForm,
         statement,
+        legalSuggestions,
+        legalAnalysisWarning,
+        supportedSections,
+        verifiedByOfficer,
       })
     )
     window.location.href = '/police/new-fir/preview'

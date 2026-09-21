@@ -57,7 +57,13 @@ export default function PoliceDashboard() {
 
             <div className="mt-6">
               <Link
-                href="/police/new-fir"
+                href="/police/new-fir?mode=new"
+                onClick={() => {
+                  sessionStorage.setItem('lawaid_fir_mode', 'new')
+                  sessionStorage.removeItem('lawaid_fir_draft')
+                  sessionStorage.removeItem('lawaid_draft_id')
+                  localStorage.removeItem('lawaid_fir_draft')
+                }}
                 className="inline-flex items-center justify-center bg-[#12335B] text-white px-6 py-3 rounded-lg font-semibold hover:bg-[#0d2949] transition"
               >
                 + Create New FIR
@@ -83,7 +89,13 @@ export default function PoliceDashboard() {
 
               {/* FIR Drafting */}
               <Link
-                href="/police/new-fir"
+                href="/police/new-fir?mode=new"
+                onClick={() => {
+                  sessionStorage.setItem('lawaid_fir_mode', 'new')
+                  sessionStorage.removeItem('lawaid_fir_draft')
+                  sessionStorage.removeItem('lawaid_draft_id')
+                  localStorage.removeItem('lawaid_fir_draft')
+                }}
                 className="group min-h-[245px] rounded-[18px] border border-white/70 bg-white/65 backdrop-blur-md shadow-[0_15px_40px_rgba(18,51,91,0.12)] p-7 transition-all duration-300 hover:-translate-y-1 hover:bg-white/80 hover:shadow-[0_20px_50px_rgba(18,51,91,0.18)]"
               >
 
@@ -285,8 +297,9 @@ function DraftsList() {
                 Updated: {d.updated_at ? new Date(d.updated_at).toLocaleString() : 'Recently saved'}
               </p>
               <Link 
-                href="/police/new-fir"
+                href={`/police/new-fir?mode=resume${d.draft_id ? `&draft_id=${d.draft_id}` : ''}`}
                 onClick={() => {
+                  sessionStorage.setItem('lawaid_fir_mode', 'resume')
                   if (d.draft_id && d.draft_id !== 'session_draft') {
                     sessionStorage.setItem("lawaid_draft_id", d.draft_id)
                   }

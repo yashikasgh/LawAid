@@ -10,11 +10,50 @@ type BNSResult = {
   section: string
   title: string
   similarity: number
+  clause?: string
+  text?: string
+  chapter?: string
+  bailable?: string
+  cognizable?: string
+  rank?: number
+  items?: BNSResult[]
 }
 
 type BNSResponse = {
   status: string
   results: BNSResult[]
+}
+
+export function groupBnsResults(rawResults: BNSResult[]): BNSResult[] {
+  if (!rawResults || rawResults.length === 0) return []
+
+  const groupsMap = new Map<string, BNSResult[]>()
+
+  for (const item of rawResults) {
+    const match = item.section ? String(item.section).match(/\b\d+\b/) : null
+    const canonicalKey = match ? match[0] : (item.section || '').trim().toLowerCase()
+
+    if (!groupsMap.has(canonicalKey)) {
+      groupsMap.set(canonicalKey, [])
+    }
+    groupsMap.get(canonicalKey)!.push(item)
+  }
+
+  const grouped: BNSResult[] = []
+
+  for (const [key, items] of groupsMap.entries()) {
+    const sortedItems = [...items].sort((a, b) => b.similarity - a.similarity)
+    const best = sortedItems[0]
+    const displaySection = key.match(/^\d+$/) ? key : (best.section || key)
+
+    grouped.push({
+      ...best,
+      section: displaySection,
+      items: sortedItems,
+    })
+  }
+
+  return grouped.sort((a, b) => b.similarity - a.similarity)
 }
 
 export default function BNSSearchPage() {
@@ -44,7 +83,8 @@ export default function BNSSearchPage() {
       const data: BNSResponse = response.data
 
       setStatus(data.status)
-      setResults(data.results || [])
+      const raw = data.results || []
+      setResults(groupBnsResults(raw))
     } catch (err: any) {
       console.error('BNS search failed:', err)
 
