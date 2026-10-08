@@ -240,7 +240,9 @@ def generate_fir_pdf(fir_data: Dict[str, Any]) -> bytes:
     _draw_text_point(page1, off_rank, 348.0, 496.0, fontname=FN, fontsize=FS, color=COLOR)
     _draw_text_point(page1, off_no, 470.0, 496.0, fontname=FN, fontsize=7.0, color=COLOR)
 
-    # ITEM 14: Complainant Signature area (Left intentionally clean / un-overlapped)
+    # ITEM 14: typed acknowledgement only. LawAid deliberately does not capture a canvas signature.
+    acknowledgement = g(fir_data, "complainantSignatureAcknowledgement", "complainant_signature_acknowledgement")
+    _draw_textbox_rect(page1, acknowledgement, 70.0, 527.0, 310.0, 544.0, fontname=FN, fontsize=6.0, color=COLOR)
 
     # ITEM 15: Date & Time of Despatch to Court
     dt_date = g(fir_data, "dispatchDate", "dispatch_to_court.date")

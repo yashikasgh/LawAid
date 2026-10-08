@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useState, useRef, useEffect } from 'react'
 import Navbar from '@/components/Navbar'
 import { policeAPI, firDraftsAPI } from '@/lib/api'
-import { ActSectionEntry } from '@/lib/pdf/fir-generator'
+import { ActSectionEntry, FIRFormData } from '@/lib/pdf/fir-generator'
 
 export type BnsSuggestion = {
   id: string
@@ -22,63 +22,7 @@ export type BnsSuggestion = {
   removed?: boolean
 }
 
-type FormData = {
-  district: string
-  policeStation: string
-  year: string
-  firNo: string
-  firDate: string
-
-  actEntries: ActSectionEntry[]
-  act1: string
-  section1: string
-  act2: string
-  section2: string
-  act3: string
-  section3: string
-  otherActs: string
-
-  occurrenceDay: string
-  occurrenceDate: string
-  occurrenceTime: string
-  informationDate: string
-  informationTime: string
-  gdEntry: string
-  gdTime: string
-
-  informationType: string
-
-  placeDirection: string
-  beatNo: string
-  placeAddress: string
-  outsidePoliceStation: string
-  outsideDistrict: string
-
-  complainantName: string
-  fatherHusbandName: string
-  dob: string
-  nationality: string
-  passportNo: string
-  passportDate: string
-  passportPlace: string
-  occupation: string
-  complainantAddress: string
-
-  accusedDetails: string
-  delayReason: string
-  propertyDetails: string
-  propertyValue: string
-  inquestDetails: string
-  firContents: string
-
-  actionTaken: string
-  officerRank: string
-  officerName: string
-  officerNo: string
-
-  dispatchDate: string
-  dispatchTime: string
-}
+type FormData = FIRFormData & { actEntries: ActSectionEntry[] }
 
 const initialForm: FormData = {
   district: '',
@@ -142,6 +86,7 @@ const initialForm: FormData = {
 
   dispatchDate: '',
   dispatchTime: '',
+  complainantSignatureAcknowledgement: '',
 }
 
 const SAMPLE_INCIDENTS = [
@@ -230,7 +175,8 @@ function mapFirDataToFormData(firData: any, sanitizedIncident: string, existingF
   if (!occurrenceDate && incidentText) {
     const mDate = incidentText.match(/\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})\b/i)
     if (mDate) {
-      occurrenceDate = mDate[0]
+      const monthIndex = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(mDate[2].slice(0, 3).toLowerCase()) + 1
+      occurrenceDate = `${mDate[1].padStart(2, '0')}/${String(monthIndex).padStart(2, '0')}/${mDate[3]}`
     } else {
       const mSlash = incidentText.match(/\b(\d{1,2}\/\d{1,2}\/\d{2,4})\b/)
       if (mSlash) occurrenceDate = mSlash[0]
@@ -264,7 +210,7 @@ function mapFirDataToFormData(firData: any, sanitizedIncident: string, existingF
   const outsideDistrict = getFirstVal(place.district, firData?.outsideDistrict, existingForm?.outsideDistrict)
 
   if (!placeAddress && incidentText) {
-    const mLoc = incidentText.match(/\b(?:near|at|around|in)\s+(?:the\s+)?([a-zA-Z0-9\s,-]+?(?:market|road|street|station|bus stand|park|shop|colony|nagar|area|house|store|mall|place|junction|cross|village|city|bazaar))\b/i)
+    const mLoc = incidentText.match(/\b(?:near|at|around|in)\s+(?:the\s+)?([^.!]+?)(?:,?\s+(?:while|when|where)\b|[.!])/i)
     if (mLoc) placeAddress = mLoc[0]
   }
 
@@ -318,6 +264,12 @@ function mapFirDataToFormData(firData: any, sanitizedIncident: string, existingF
     if (mVal) {
       propertyValue = `₹${mVal[1]}`
     }
+  }
+
+  if (!propertyDetails && incidentText) {
+    const mProperty = incidentText.match(/(?:snatched|stole|grabbed)\s+(?:the\s+)?([^.,]+?)(?:\s+(?:worth|valued at)|[.,])/i)
+    const extractedProperty = mProperty?.[1]
+    if (extractedProperty) propertyDetails = extractedProperty.replace(/^(?:the\s+)?complainant(?:'s)?\s+/i, '').trim()
   }
 
   // 8. FIR contents narrative
@@ -404,7 +356,13 @@ function mapFirDataToFormData(firData: any, sanitizedIncident: string, existingF
 
     dispatchDate,
     dispatchTime,
+    complainantSignatureAcknowledgement: getFirstVal(
+      firData?.complainant_signature_acknowledgement,
+      firData?.complainantSignatureAcknowledgement,
+      existingForm?.complainantSignatureAcknowledgement,
+    ),
   }
+
 }
 
 export function extractSectionNumber(secStr: string): string {
@@ -631,6 +589,32 @@ export default function NewFIRPage() {
     setForm((prev) => ({
       ...prev,
       [field]: value,
+    }))
+  }
+
+  function fillDemoTestValues() {
+    const now = new Date()
+    const date = now.toLocaleDateString('en-GB')
+    const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    setForm((prev) => ({
+      ...prev,
+      district: prev.district || 'Navi Mumbai (DEMO)',
+      policeStation: prev.policeStation || 'Kharghar Police Station (DEMO)',
+      informationDate: prev.informationDate || date,
+      informationTime: prev.informationTime || time,
+      gdEntry: prev.gdEntry || 'GD/DEMO/001',
+      gdTime: prev.gdTime || time,
+      placeDirection: prev.placeDirection || 'Approx. 1 km east of Police Station (DEMO)',
+      beatNo: prev.beatNo || 'Beat 04 (DEMO)',
+      fatherHusbandName: prev.fatherHusbandName || 'Ramesh Kumar (DEMO)',
+      dob: prev.dob || '01/01/1998 (DEMO)',
+      occupation: prev.occupation || 'Student (DEMO)',
+      complainantAddress: prev.complainantAddress || 'Demo address - officer to verify',
+      officerName: prev.officerName || 'Inspector A. Sharma (DEMO)',
+      officerRank: prev.officerRank || 'Inspector (DEMO)',
+      officerNo: prev.officerNo || 'PS-DEMO-001',
+      dispatchDate: prev.dispatchDate || date,
+      dispatchTime: prev.dispatchTime || time,
     }))
   }
 
@@ -1183,6 +1167,11 @@ export default function NewFIRPage() {
                 )}
               </div>
 
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <span>Testing only: fills blank administrative fields with clearly marked DEMO values. It does not alter the incident narrative.</span>
+                <button type="button" onClick={fillDemoTestValues} className="rounded border border-amber-500 bg-white px-3 py-1.5 font-semibold text-amber-900">Fill demo test values</button>
+              </div>
+
               {/* 1. FIR Identification */}
               <div className="border border-gray-300 rounded-xl p-4 bg-white/90 space-y-3">
                 <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5">
@@ -1230,7 +1219,7 @@ export default function NewFIRPage() {
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Date</label>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Draft Date</label>
                     <input
                       type="text"
                       value={form.firDate}
@@ -1365,6 +1354,17 @@ export default function NewFIRPage() {
                 </div>
               </div>
 
+              {/* 3(b) & 3(c): Information at P.S. and General Diary */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90 space-y-3">
+                <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5">3(b) Information Received at Police Station & 3(c) General Diary Reference</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div><label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Information Received Date</label><input type="text" value={form.informationDate} onChange={(e) => updateField('informationDate', e.target.value)} placeholder="DD/MM/YYYY" className="w-full border rounded-md p-2 text-xs outline-none" /></div>
+                  <div><label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Information Received Time</label><input type="text" value={form.informationTime} onChange={(e) => updateField('informationTime', e.target.value)} placeholder="Time" className="w-full border rounded-md p-2 text-xs outline-none" /></div>
+                  <div><label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">General Diary Entry No.</label><input type="text" value={form.gdEntry} onChange={(e) => updateField('gdEntry', e.target.value)} placeholder="GD entry number" className="w-full border rounded-md p-2 text-xs outline-none" /></div>
+                  <div><label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">General Diary Time</label><input type="text" value={form.gdTime} onChange={(e) => updateField('gdTime', e.target.value)} placeholder="Time" className="w-full border rounded-md p-2 text-xs outline-none" /></div>
+                </div>
+              </div>
+
               {/* 4. Type of Information */}
               <div className="border border-gray-300 rounded-xl p-4 bg-white/90">
                 <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5 mb-3">
@@ -1431,6 +1431,10 @@ export default function NewFIRPage() {
                     />
                   </div>
                 </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div><label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Outside-jurisdiction Police Station</label><input type="text" value={form.outsidePoliceStation} onChange={(e) => updateField('outsidePoliceStation', e.target.value)} placeholder="Police Station, if outside jurisdiction" className="w-full border rounded-md p-2 text-xs outline-none" /></div>
+                  <div><label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Outside-jurisdiction District</label><input type="text" value={form.outsideDistrict} onChange={(e) => updateField('outsideDistrict', e.target.value)} placeholder="District, if outside jurisdiction" className="w-full border rounded-md p-2 text-xs outline-none" /></div>
+                </div>
               </div>
 
               {/* 6. Complainant / Informant */}
@@ -1469,6 +1473,11 @@ export default function NewFIRPage() {
                       className="w-full border rounded-md p-2 text-xs outline-none"
                     />
                   </div>
+                  <div><label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Date / Year of Birth</label><input type="text" value={form.dob} onChange={(e) => updateField('dob', e.target.value)} placeholder="DD/MM/YYYY or year" className="w-full border rounded-md p-2 text-xs outline-none" /></div>
+                  <div><label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Occupation</label><input type="text" value={form.occupation} onChange={(e) => updateField('occupation', e.target.value)} placeholder="Occupation" className="w-full border rounded-md p-2 text-xs outline-none" /></div>
+                  <div><label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Passport Number, if applicable</label><input type="text" value={form.passportNo} onChange={(e) => updateField('passportNo', e.target.value)} placeholder="Passport number" className="w-full border rounded-md p-2 text-xs outline-none" /></div>
+                  <div><label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Passport Date of Issue</label><input type="text" value={form.passportDate} onChange={(e) => updateField('passportDate', e.target.value)} placeholder="DD/MM/YYYY" className="w-full border rounded-md p-2 text-xs outline-none" /></div>
+                  <div><label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Passport Place of Issue</label><input type="text" value={form.passportPlace} onChange={(e) => updateField('passportPlace', e.target.value)} placeholder="Place of issue" className="w-full border rounded-md p-2 text-xs outline-none" /></div>
                   <div>
                     <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Address</label>
                     <input
@@ -1496,10 +1505,16 @@ export default function NewFIRPage() {
                 />
               </div>
 
-              {/* 8. Property Details & Value */}
+              {/* 8. Reason for delay */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90">
+                <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5 mb-2">8. Reason for Delay in Reporting</h4>
+                <textarea value={form.delayReason} onChange={(e) => updateField('delayReason', e.target.value)} rows={2} placeholder="Reason for delay, if any" className="w-full border rounded-md p-2 text-xs outline-none" />
+              </div>
+
+              {/* 9 & 10. Property Details and total value */}
               <div className="border border-gray-300 rounded-xl p-4 bg-white/90 space-y-3">
                 <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5">
-                  8. Particulars of Property Stolen / Involved & Value
+                  9. Particulars of Property Stolen / Involved & 10. Total Value
                 </h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
@@ -1525,6 +1540,12 @@ export default function NewFIRPage() {
                 </div>
               </div>
 
+              {/* 11. Inquest report */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90">
+                <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5 mb-2">11. Inquest Report / U.D. Case Number, if any</h4>
+                <input type="text" value={form.inquestDetails} onChange={(e) => updateField('inquestDetails', e.target.value)} placeholder="Inquest report or U.D. case number" className="w-full border rounded-md p-2 text-xs outline-none" />
+              </div>
+
               {/* 12. F.I.R. Contents Narrative */}
               <div className="border border-gray-300 rounded-xl p-4 bg-white/90">
                 <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5 mb-2">
@@ -1539,12 +1560,12 @@ export default function NewFIRPage() {
                 />
               </div>
 
-              {/* 13 & 15. Action Taken & Officer Details */}
+              {/* 13. Action Taken and officer details */}
               <div className="border border-gray-300 rounded-xl p-4 bg-white/90 space-y-3">
                 <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5">
-                  13 & 15. Action Taken & Officer Details
+                  13. Action Taken & Officer-in-Charge Details
                 </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                   <div>
                     <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Action Taken</label>
                     <input
@@ -1566,15 +1587,32 @@ export default function NewFIRPage() {
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Rank & Badge No.</label>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Rank</label>
                     <input
                       type="text"
                       value={form.officerRank}
                       onChange={(e) => updateField('officerRank', e.target.value)}
-                      placeholder="Rank / Badge No."
+                      placeholder="Rank"
                       className="w-full border rounded-md p-2 text-xs outline-none font-medium"
                     />
                   </div>
+                  <div><label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Officer Number</label><input type="text" value={form.officerNo} onChange={(e) => updateField('officerNo', e.target.value)} placeholder="Badge / officer number" className="w-full border rounded-md p-2 text-xs outline-none font-medium" /></div>
+                </div>
+              </div>
+
+              {/* 14. Typed acknowledgement only - no handwritten signature capture */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90">
+                <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5 mb-2">14. Complainant / Informant Acknowledgement</h4>
+                <p className="mb-2 text-[11px] text-gray-500">Typed record only; LawAid does not collect a handwritten or canvas signature.</p>
+                <input type="text" value={form.complainantSignatureAcknowledgement || ''} onChange={(e) => updateField('complainantSignatureAcknowledgement', e.target.value)} placeholder="Typed name, acknowledgement, or officer note" className="w-full border rounded-md p-2 text-xs outline-none" />
+              </div>
+
+              {/* 15. Dispatch to court */}
+              <div className="border border-gray-300 rounded-xl p-4 bg-white/90">
+                <h4 className="text-xs font-bold text-[#12335B] uppercase tracking-wider border-b pb-1.5 mb-3">15. Date & Time of Dispatch to Court</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div><label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Dispatch Date</label><input type="text" value={form.dispatchDate} onChange={(e) => updateField('dispatchDate', e.target.value)} placeholder="DD/MM/YYYY" className="w-full border rounded-md p-2 text-xs outline-none" /></div>
+                  <div><label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Dispatch Time</label><input type="text" value={form.dispatchTime} onChange={(e) => updateField('dispatchTime', e.target.value)} placeholder="Time" className="w-full border rounded-md p-2 text-xs outline-none" /></div>
                 </div>
               </div>
 

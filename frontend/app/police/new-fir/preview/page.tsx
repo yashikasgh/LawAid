@@ -17,6 +17,12 @@ const makeApprovalId = () =>
     ? crypto.randomUUID()
     : `approval-${Date.now()}-${Math.random().toString(36).slice(2)}`
 
+const toPdfBlob = (bytes: Uint8Array) => {
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  return new Blob([copy.buffer], { type: 'application/pdf' })
+}
+
 export default function FIRPreviewPage() {
   const [form, setForm] = useState<FIRFormData | null>(null)
   const [pdfUrl, setPdfUrl] = useState('')
@@ -42,7 +48,7 @@ export default function FIRPreviewPage() {
           signed_at: new Date().toLocaleString(),
         })
         const pdfBytes = await generateFIRPdf(savedForm)
-        objectUrl = URL.createObjectURL(new Blob([pdfBytes], { type: 'application/pdf' }))
+        objectUrl = URL.createObjectURL(toPdfBlob(pdfBytes))
         setPdfUrl(objectUrl)
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : 'Failed to generate FIR preview.')
@@ -94,7 +100,7 @@ export default function FIRPreviewPage() {
       }
       const binary = atob(result.pdf_base64)
       const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
-      const finalUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+      const finalUrl = URL.createObjectURL(toPdfBlob(bytes))
       if (pdfUrl) URL.revokeObjectURL(pdfUrl)
       setPdfUrl(finalUrl)
       setSignature(finalSignature)

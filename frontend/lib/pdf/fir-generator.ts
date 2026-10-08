@@ -81,6 +81,9 @@ export type FIRFormData = {
   dispatchDate: string
   dispatchTime: string
 
+  // Item 14 is a typed acknowledgement only; LawAid does not capture a canvas signature.
+  complainantSignatureAcknowledgement?: string
+
   statement?: string
   digital_signature?: {
     status: 'NOT_VERIFIED' | 'VALID'
