@@ -29,6 +29,22 @@ def _draw_textbox_rect(page: fitz.Page, text: str, x0: float, y0: float, x1: flo
     page.insert_textbox(rect, str(text).strip(), fontname=fontname, fontsize=fontsize, color=color, align=0)
 
 
+def _draw_fitted_text(page: fitz.Page, text: str, x: float, y: float, max_width: float, fontname: str = "helv", fontsize: float = 7.5, color=(0, 0, 0)):
+    """Draw one IF1 field without spilling into the next printed label."""
+    if not text:
+        return
+    value = str(text).strip()
+    size = fontsize
+    while size > 5.0 and fitz.get_text_length(value, fontname=fontname, fontsize=size) > max_width:
+        size -= 0.5
+    if fitz.get_text_length(value, fontname=fontname, fontsize=size) > max_width:
+        ellipsis = "..."
+        while value and fitz.get_text_length(value + ellipsis, fontname=fontname, fontsize=size) > max_width:
+            value = value[:-1]
+        value += ellipsis
+    _draw_text_point(page, value, x, y, fontname=fontname, fontsize=size, color=color)
+
+
 def generate_fir_pdf(fir_data: Dict[str, Any]) -> bytes:
     """
     Overlays structured FIR JSON fields (1-15) directly onto the official 2-page IF1 PDF template.
@@ -77,16 +93,16 @@ def generate_fir_pdf(fir_data: Dict[str, Any]) -> bytes:
     # =========================================================================
 
     # ITEM 1: FIR Identifiers (y=119.0 baseline)
-    _draw_text_point(page0, g(fir_data, "district"), 105.0, 119.0, fontname=FN, fontsize=7.0, color=COLOR)
-    _draw_text_point(page0, g(fir_data, "policeStation", "police_station"), 225.0, 119.0, fontname=FN, fontsize=7.0, color=COLOR)
-    _draw_text_point(page0, g(fir_data, "year", default="2026"), 330.0, 119.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, g(fir_data, "district"), 96.0, 119.0, 63.0, fontname=FN, fontsize=7.0, color=COLOR)
+    _draw_fitted_text(page0, g(fir_data, "policeStation", "police_station"), 187.0, 119.0, 60.0, fontname=FN, fontsize=7.0, color=COLOR)
+    _draw_fitted_text(page0, g(fir_data, "year", default="2026"), 283.0, 119.0, 62.0, fontname=FN, fontsize=FS, color=COLOR)
     
     # FIR No - compact string to fit dotted box (x=447 to 490)
     fir_no = g(fir_data, "firNo", "fir_number", default="Draft")
     if "Draft" in fir_no:
         fir_no = "Draft"
-    _draw_text_point(page0, fir_no, 450.0, 119.0, fontname=FN, fontsize=FS, color=COLOR)
-    _draw_text_point(page0, g(fir_data, "firDate", "fir_date"), 525.0, 119.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, fir_no, 403.0, 119.0, 60.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, g(fir_data, "firDate", "fir_date"), 494.0, 119.0, 46.0, fontname=FN, fontsize=FS, color=COLOR)
 
     # ITEM 2: Act(s) & Section(s) - Render form.actEntries directly as authoritative officer state
     raw_entries = fir_data.get("actEntries")
@@ -130,8 +146,8 @@ def generate_fir_pdf(fir_data: Dict[str, Any]) -> bytes:
                 act_str = "Bharatiya Nyaya Sanhita, 2023"
                 sec_str = str(item).strip()
 
-            _draw_text_point(page0, act_str, act_x, y_pos, fontname=FN, fontsize=FS, color=COLOR)
-            _draw_text_point(page0, sec_str, 370.0, y_pos, fontname=FN, fontsize=FS, color=COLOR)
+            _draw_fitted_text(page0, act_str, act_x, y_pos, 153.0, fontname=FN, fontsize=FS, color=COLOR)
+            _draw_fitted_text(page0, sec_str, 333.0, y_pos, 205.0, fontname=FN, fontsize=FS, color=COLOR)
 
         # Handle remaining entries (> 3) for Item 2(iv)
         overflow_entries = valid_entries[3:]
@@ -160,29 +176,30 @@ def generate_fir_pdf(fir_data: Dict[str, Any]) -> bytes:
     occ_time = g(fir_data, "occurrenceTime", "occurrence.time_from", "occurrence.time", "occurrence_time")
     occ_day = g(fir_data, "occurrenceDay", "occurrence.day", "occurrence_day")
 
-    _draw_text_point(page0, occ_day, 258.0, 240.0, fontname=FN, fontsize=FS, color=COLOR)
-    _draw_text_point(page0, occ_date, 365.0, 240.0, fontname=FN, fontsize=FS, color=COLOR)
-    _draw_text_point(page0, occ_time, 485.0, 240.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, occ_day, 253.0, 240.0, 100.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, occ_date, 357.0, 240.0, 84.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, occ_time, 478.0, 240.0, 61.0, fontname=FN, fontsize=FS, color=COLOR)
 
     info_date = g(fir_data, "informationDate", "information_received.date", "information_date")
     info_time = g(fir_data, "informationTime", "information_received.time", "information_time")
-    _draw_text_point(page0, info_date, 248.0, 267.0, fontname=FN, fontsize=FS, color=COLOR)
-    _draw_text_point(page0, info_time, 430.0, 267.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, info_date, 260.0, 267.0, 116.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, info_time, 407.0, 267.0, 133.0, fontname=FN, fontsize=FS, color=COLOR)
 
     gd_entry = g(fir_data, "gdEntry", "general_diary.entry_numbers", "gd_entry")
     gd_time = g(fir_data, "gdTime", "general_diary.time", "gd_time")
-    _draw_text_point(page0, gd_entry, 295.0, 294.0, fontname=FN, fontsize=FS, color=COLOR)
-    _draw_text_point(page0, gd_time, 460.0, 294.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, gd_entry, 280.0, 294.0, 92.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, gd_time, 405.0, 294.0, 137.0, fontname=FN, fontsize=FS, color=COLOR)
 
     # ITEM 4: Type of Information
-    _draw_text_point(page0, g(fir_data, "informationType", "type_of_information", default="Written"), 365.0, 321.0, fontname=FN, fontsize=FS, color=COLOR)
+    info_type = g(fir_data, "informationType", "type_of_information", default="Written").lower()
+    _draw_text_point(page0, "X", 270.0 if info_type.startswith("written") else 322.0, 321.0, fontname="hebo", fontsize=7.0, color=COLOR)
 
     # ITEM 5: Place of Occurrence
-    _draw_text_point(page0, g(fir_data, "placeDirection", "place_of_occurrence.direction_distance_from_ps"), 345.0, 347.0, fontname=FN, fontsize=FS, color=COLOR)
-    _draw_text_point(page0, g(fir_data, "beatNo", "place_of_occurrence.beat_no"), 500.0, 347.0, fontname=FN, fontsize=FS, color=COLOR)
-    _draw_text_point(page0, g(fir_data, "placeAddress", "place_of_occurrence.address", "place_address", "location"), 155.0, 374.0, fontname=FN, fontsize=FS, color=COLOR)
-    _draw_text_point(page0, g(fir_data, "outsidePoliceStation", "place_of_occurrence.outside_police_station"), 440.0, 401.0, fontname=FN, fontsize=FS, color=COLOR)
-    _draw_text_point(page0, g(fir_data, "outsideDistrict", "place_of_occurrence.district"), 150.0, 414.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, g(fir_data, "placeDirection", "place_of_occurrence.direction_distance_from_ps"), 344.0, 347.0, 82.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, g(fir_data, "beatNo", "place_of_occurrence.beat_no"), 473.0, 347.0, 64.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, g(fir_data, "placeAddress", "place_of_occurrence.address", "place_address", "location"), 147.0, 374.0, 388.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, g(fir_data, "outsidePoliceStation", "place_of_occurrence.outside_police_station"), 400.0, 401.0, 135.0, fontname=FN, fontsize=FS, color=COLOR)
+    _draw_fitted_text(page0, g(fir_data, "outsideDistrict", "place_of_occurrence.district"), 135.0, 414.0, 128.0, fontname=FN, fontsize=FS, color=COLOR)
 
     # ITEM 6: Complainant / Informant
     _draw_text_point(page0, g(fir_data, "complainantName", "complainant.name"), 140.0, 468.0, fontname=FN, fontsize=FS, color=COLOR)
