@@ -178,6 +178,9 @@ async def register_fir_route(
         "fir_id": record.fir_id,
         "sha256_hash": record.sha256_hash,
         "status": record.status,
+        "signature_status": record.signature_status,
+        "signed_by": record.signed_by,
+        "signed_at": record.signed_at,
         "created_at": record.created_at,
         "complaint_text_saved": bool(extracted_text),
     }
@@ -966,6 +969,9 @@ def get_fir(fir_id: str, db: Session = Depends(get_db)):
         "status": record.status,
         "created_at": record.created_at,
         "complaint_text": record.complaint_text,
+        "signature_status": record.signature_status,
+        "signed_by": record.signed_by,
+        "signed_at": record.signed_at,
     }
 
 
@@ -982,4 +988,4 @@ def check_duplicate_route(body: DuplicateCheckRequest, db: Session = Depends(get
     Accepts a JSON body { complaint_text } (not a query parameter).
     """
     result = check_duplicate(db, body.complaint_text)
-    return result
+    return result

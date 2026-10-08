@@ -12,4 +12,7 @@ class FIRRegistry(Base):
     station_code = Column(String, nullable=False)
     status = Column(String, default="registered")
     complaint_text = Column(String, nullable=True)
+    signature_status = Column(String, nullable=False, default="NOT_VERIFIED")
+    signed_by = Column(String, nullable=True)
+    signed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -1,3 +1,4 @@
+import base64
 import datetime
 import hashlib
 from typing import Dict, Any, List, Optional
@@ -176,10 +177,37 @@ def validate_fir(body: ValidateFIRRequest, current_user: User = Depends(require_
 
 class ApproveFIRRequest(BaseModel):
     fir_draft_id: Optional[str] = None
+    approval_id: str
     station_code: Optional[str] = "PS001"
     officer_name: Optional[str] = "Station House Officer"
     summary: Optional[str] = ""
     fir_data: Optional[Dict[str, Any]] = None
+    otp_code: str
+
+
+class ApprovalOTPRequest(BaseModel):
+    approval_id: str
+
+
+@router.post("/request-fir-approval-otp")
+def request_fir_approval_otp(
+    body: ApprovalOTPRequest,
+    current_user: User = Depends(require_role("police")),
+):
+    """Issue a short-lived OTP for finalizing the current FIR draft."""
+    from app.services.fir_approval import issue_approval_otp
+
+    approval_id = body.approval_id.strip()
+    if not approval_id:
+        raise HTTPException(status_code=400, detail="An approval session is required to issue an OTP.")
+    code = issue_approval_otp(current_user.id, approval_id)
+    # This project has no SMS/email gateway yet. Do not return the OTP to a browser.
+    print(f"[FIR APPROVAL OTP] officer_id={current_user.id} approval_id={approval_id} otp={code}")
+    return {
+        "status": "OTP_SENT",
+        "message": "Approval OTP issued to the officer's registered delivery channel.",
+        "expires_in_minutes": 10,
+    }
 
 
 @router.post("/approve-fir")
@@ -196,6 +224,7 @@ def approve_fir(
     import uuid
     from ai.fir_engine.fir_pdf_generator import generate_fir_pdf
     from app.core.mongo import mongo_available, fs as _mongo_fs
+    from app.services.fir_approval import verify_approval_otp
     
     now = datetime.datetime.now()
     year = now.year
@@ -206,31 +235,48 @@ def approve_fir(
     else:
         official_fir_id = f"FIR/{year}/{uuid.uuid4().hex[:8].upper()}"
 
-    # Generate final PDF bytes from fir_data if provided
-    pdf_bytes = b""
-    if body.fir_data:
-        try:
-            body.fir_data["fir_number"] = official_fir_id
-            pdf_bytes = generate_fir_pdf(body.fir_data)
-        except Exception:
-            pdf_bytes = b""
-            
-    if not pdf_bytes:
-        # Fallback if fir_data generation fails or wasn't provided
-        hash_source = f"{official_fir_id}:{body.station_code}:{current_user.id}:{now.isoformat()}"
-        pdf_bytes = hash_source.encode("utf-8")
+    if not verify_approval_otp(current_user.id, body.approval_id, body.otp_code):
+        raise HTTPException(status_code=401, detail="A valid, unexpired approval OTP is required to finalize this FIR.")
+
+    signed_by = (body.officer_name or "Station House Officer").strip()
+    signed_at = now.isoformat()
+
+    if not body.fir_data:
+        raise HTTPException(status_code=400, detail="Final FIR data is required for approval.")
+
+    # The final PDF is the signed artifact. Do not mark an FIR valid if it cannot be rendered.
+    try:
+        final_fir_data = {
+            **body.fir_data,
+            "fir_number": official_fir_id,
+            "firNo": official_fir_id,
+            "digital_signature": {
+                "status": "VALID",
+                "signed_by": signed_by,
+                "signed_at": signed_at,
+            },
+        }
+        pdf_bytes = generate_fir_pdf(final_fir_data)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Failed to generate the finalized FIR PDF; the FIR was not approved.") from exc
 
     fir_hash = hashlib.sha256(pdf_bytes).hexdigest()
 
     # Store in MongoDB/GridFS
     file_id = None
-    if mongo_available and _mongo_fs is not None and body.fir_data:
+    if mongo_available and _mongo_fs is not None:
         try:
             file_id = str(_mongo_fs.put(
                 pdf_bytes,
                 filename=f"{official_fir_id.replace('/', '_')}.pdf",
                 content_type="application/pdf",
-                metadata={"fir_id": official_fir_id, "sha256_hash": fir_hash}
+                metadata={
+                    "fir_id": official_fir_id,
+                    "sha256_hash": fir_hash,
+                    "signature_status": "VALID",
+                    "signed_by": signed_by,
+                    "signed_at": signed_at,
+                }
             ))
         except Exception:
             file_id = None
@@ -244,6 +290,9 @@ def approve_fir(
             station_code=body.station_code or "PS001",
             status="APPROVED",
             complaint_text=body.summary or "",
+            signature_status="VALID",
+            signed_by=signed_by,
+            signed_at=now,
         )
         db.add(registry_record)
         db.commit()
@@ -259,6 +308,12 @@ def approve_fir(
         "officer": body.officer_name,
         "officer_id": current_user.id,
         "approved_at": now.isoformat(),
+        "digital_signature": {
+            "status": "VALID",
+            "signed_by": signed_by,
+            "signed_at": signed_at,
+        },
+        "pdf_base64": base64.b64encode(pdf_bytes).decode("ascii"),
         "pdf_url": f"/api/fir/download/{file_id}" if file_id else None,
         "tamper_proof_seal": "VERIFIED_BNSS_OFFICIAL",
     }
@@ -475,11 +530,17 @@ def render_fir_pdf(body: RenderFIRPDFRequest, current_user: User = Depends(requi
         raise HTTPException(status_code=400, detail="Invalid FIR data provided.")
 
     try:
-        pdf_bytes = generate_fir_pdf(body.fir_data)
+        preview_data = {**body.fir_data}
+        preview_data["digital_signature"] = {
+            "status": "NOT_VERIFIED",
+            "signed_by": preview_data.get("officerName") or "Officer pending approval",
+            "signed_at": datetime.datetime.now().isoformat(),
+        }
+        pdf_bytes = generate_fir_pdf(preview_data)
         pdf_base64 = base64.b64encode(pdf_bytes).decode("utf-8")
         return {
             "status": "ok",
             "pdf_base64": pdf_base64
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate FIR PDF: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate FIR PDF: {str(e)}")

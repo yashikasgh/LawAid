@@ -492,6 +492,7 @@ export default function NewFIRPage() {
       if (modeParam === 'new' || (!modeParam && !draftIdParam && sessionStorage.getItem('lawaid_fir_mode') !== 'resume')) {
         sessionStorage.removeItem('lawaid_fir_draft')
         sessionStorage.removeItem('lawaid_draft_id')
+        sessionStorage.removeItem('lawaid_fir_approval_id')
         localStorage.removeItem('lawaid_fir_draft')
         sessionStorage.setItem('lawaid_fir_mode', 'new')
 
@@ -538,6 +539,7 @@ export default function NewFIRPage() {
       // 3. Fallback: Blank defaults
       sessionStorage.removeItem('lawaid_fir_draft')
       sessionStorage.removeItem('lawaid_draft_id')
+      sessionStorage.removeItem('lawaid_fir_approval_id')
       localStorage.removeItem('lawaid_fir_draft')
       sessionStorage.setItem('lawaid_fir_mode', 'new')
       setStatement('')
@@ -1620,6 +1622,7 @@ export default function NewFIRPage() {
                   type="button"
                   onClick={() => {
                     sessionStorage.removeItem('lawaid_fir_draft')
+                    sessionStorage.removeItem('lawaid_fir_approval_id')
                     setForm(initialForm)
                     setStatement('')
                     setDraftGenerated(false)

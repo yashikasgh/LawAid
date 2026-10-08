@@ -248,6 +248,22 @@ def generate_fir_pdf(fir_data: Dict[str, Any]) -> bytes:
     disp_str = f"{dt_date} {dt_time}".strip()
     _draw_text_point(page1, disp_str, 242.0, 550.0, fontname=FN, fontsize=FS, color=COLOR)
 
+    # Digital approval marker. The backend supplies VALID only after OTP
+    # verification; preview rendering is always forced to NOT_VERIFIED.
+    signature = fir_data.get("digital_signature") if isinstance(fir_data, dict) else None
+    if isinstance(signature, dict):
+        is_valid = signature.get("status") == "VALID"
+        status_text = "Signature Valid" if is_valid else "Signature Not Verified"
+        signer = str(signature.get("signed_by") or off_name or "Officer pending approval").strip()
+        signed_at = str(signature.get("signed_at") or "Pending OTP approval").strip()
+        stamp_color = (0.0, 0.42, 0.18) if is_valid else (0.65, 0.12, 0.12)
+
+        stamp = fitz.Rect(330.0, 508.0, 550.0, 542.0)
+        page1.draw_rect(stamp, color=stamp_color, width=0.8)
+        _draw_text_point(page1, status_text, 337.0, 519.0, fontname="hebo", fontsize=8.0, color=stamp_color)
+        _draw_text_point(page1, f"Digitally signed by {signer}", 337.0, 529.0, fontname=FN, fontsize=6.5, color=COLOR)
+        _draw_text_point(page1, f"Date: {signed_at}", 337.0, 538.0, fontname=FN, fontsize=6.5, color=COLOR)
+
     # =========================================================================
     # CONTINUATION SHEET (If > 3 Acts & Sections)
     # =========================================================================

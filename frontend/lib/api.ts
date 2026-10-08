@@ -129,8 +129,17 @@ export const policeAPI = {
   renderFirPdf: (fir_data: any) =>
     api.post('/police/render-fir-pdf', { fir_data }),
   validateFir: (payload: unknown) => api.post('/police/validate-fir', payload),
-  approveFir: (draftId: string) =>
-    api.post('/police/approve-fir', { fir_draft_id: draftId }),
+  requestFirApprovalOtp: (approvalId: string) =>
+    api.post('/police/request-fir-approval-otp', { approval_id: approvalId }),
+  approveFir: (payload: {
+    fir_draft_id?: string
+    approval_id: string
+    station_code?: string
+    officer_name?: string
+    summary?: string
+    fir_data: unknown
+    otp_code: string
+  }) => api.post('/police/approve-fir', payload),
 }
 
 // ── FIR Drafts ──────────────────────────────────────────────
@@ -140,4 +149,4 @@ export const firDraftsAPI = {
   getDraft: (draftId: string) => api.get(`/fir/drafts/${draftId}`),
   deleteDraft: (draftId: string) => api.delete(`/fir/drafts/${draftId}`),
 }
-
+

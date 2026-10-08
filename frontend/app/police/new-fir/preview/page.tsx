@@ -3,203 +3,163 @@
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import Navbar from '@/components/Navbar'
+import { policeAPI } from '@/lib/api'
 import { generateFIRPdf, FIRFormData } from '@/lib/pdf/fir-generator'
 
-type FormData = {
-  district: string
-  policeStation: string
-  year: string
-  firNo: string
-  firDate: string
-
-  act1: string
-  section1: string
-  act2: string
-  section2: string
-  act3: string
-  section3: string
-  otherActs: string
-
-  occurrenceDay: string
-  occurrenceDate: string
-  occurrenceTime: string
-  informationDate: string
-  informationTime: string
-  gdEntry: string
-  gdTime: string
-
-  informationType: string
-
-  placeDirection: string
-  beatNo: string
-  placeAddress: string
-  outsidePoliceStation: string
-  outsideDistrict: string
-
-  complainantName: string
-  fatherHusbandName: string
-  dob: string
-  nationality: string
-  passportNo: string
-  passportDate: string
-  passportPlace: string
-  occupation: string
-  complainantAddress: string
-
-  accusedDetails: string
-  delayReason: string
-  propertyDetails: string
-  propertyValue: string
-  inquestDetails: string
-  firContents: string
-
-  actionTaken: string
-  officerRank: string
-  officerName: string
-  officerNo: string
-
-  dispatchDate: string
-  dispatchTime: string
+type SignatureState = {
+  status: 'NOT_VERIFIED' | 'VALID'
+  signed_by: string
+  signed_at: string
 }
+
+const makeApprovalId = () =>
+  typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `approval-${Date.now()}-${Math.random().toString(36).slice(2)}`
 
 export default function FIRPreviewPage() {
   const [form, setForm] = useState<FIRFormData | null>(null)
   const [pdfUrl, setPdfUrl] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [otp, setOtp] = useState('')
+  const [otpRequested, setOtpRequested] = useState(false)
+  const [approving, setApproving] = useState(false)
+  const [signature, setSignature] = useState<SignatureState | null>(null)
 
   useEffect(() => {
     let objectUrl = ''
-
-    async function createPdf() {
+    async function createPreview() {
       try {
         const saved = sessionStorage.getItem('lawaid_fir_draft')
-
-        if (!saved) {
-          setError('No FIR draft found.')
-          setLoading(false)
-          return
-        }
+        if (!saved) throw new Error('No FIR draft found.')
 
         const savedForm = JSON.parse(saved) as FIRFormData
         setForm(savedForm)
-
+        setSignature({
+          status: 'NOT_VERIFIED',
+          signed_by: savedForm.officerName || 'Officer pending approval',
+          signed_at: new Date().toLocaleString(),
+        })
         const pdfBytes = await generateFIRPdf(savedForm)
-
-        const pdfBuffer = new ArrayBuffer(pdfBytes.byteLength)
-new Uint8Array(pdfBuffer).set(pdfBytes)
-
-const blob = new Blob([pdfBuffer], {
-  type: 'application/pdf',
-})
-
-        objectUrl = URL.createObjectURL(blob)
+        objectUrl = URL.createObjectURL(new Blob([pdfBytes], { type: 'application/pdf' }))
         setPdfUrl(objectUrl)
-      } catch (err) {
-        console.error('FIR PDF generation failed:', err)
-        setError('Unable to generate the FIR PDF.')
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : 'Failed to generate FIR preview.')
       } finally {
         setLoading(false)
       }
     }
-
-    createPdf()
-
-    return () => {
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl)
-      }
-    }
+    createPreview()
+    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl) }
   }, [])
 
-  const handlePrint = () => {
-    if (pdfUrl) {
-      window.open(pdfUrl, '_blank')
+  const approvalId = () => {
+    let id = sessionStorage.getItem('lawaid_fir_approval_id')
+    if (!id) {
+      id = makeApprovalId()
+      sessionStorage.setItem('lawaid_fir_approval_id', id)
+    }
+    return id
+  }
+
+  async function requestOtp() {
+    try {
+      setError('')
+      await policeAPI.requestFirApprovalOtp(approvalId())
+      setOtpRequested(true)
+    } catch (cause: any) {
+      setError(cause?.response?.data?.detail || 'Unable to request approval OTP.')
     }
   }
 
-  if (loading) {
-    return (
-      <>
-        <Navbar />
-
-        <main className="min-h-screen bg-gray-200 flex items-center justify-center px-4">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#12335B] mx-auto mb-4" />
-
-            <p className="text-gray-600 font-medium">
-              Generating Official IF1 FIR Document Preview...
-            </p>
-          </div>
-        </main>
-      </>
-    )
+  async function finalizeFir() {
+    if (!form || !otp.trim()) return
+    try {
+      setApproving(true)
+      setError('')
+      const response = await policeAPI.approveFir({
+        fir_draft_id: sessionStorage.getItem('lawaid_draft_id') || undefined,
+        approval_id: approvalId(),
+        station_code: form.policeStation || 'PS001',
+        officer_name: form.officerName || form.officerRank || 'Station House Officer',
+        summary: form.firContents || form.statement || '',
+        fir_data: form,
+        otp_code: otp.trim(),
+      })
+      const result = response.data
+      const finalSignature = result.digital_signature as SignatureState
+      if (!finalSignature || finalSignature.status !== 'VALID' || !result.pdf_base64) {
+        throw new Error('The FIR was not finalized with a verifiable PDF.')
+      }
+      const binary = atob(result.pdf_base64)
+      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
+      const finalUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+      if (pdfUrl) URL.revokeObjectURL(pdfUrl)
+      setPdfUrl(finalUrl)
+      setSignature(finalSignature)
+      sessionStorage.removeItem('lawaid_fir_approval_id')
+    } catch (cause: any) {
+      setError(cause?.response?.data?.detail || cause?.message || 'Unable to finalize FIR.')
+    } finally {
+      setApproving(false)
+    }
   }
 
-  if (error) {
+  const isFinal = signature?.status === 'VALID'
+
+  if (!loading && error && !form) {
     return (
-      <>
+      <div className="min-h-screen bg-[#f5f3ee]">
         <Navbar />
-
-        <main className="min-h-screen bg-gray-100 flex items-center justify-center px-4">
-          <div className="bg-white rounded-xl shadow-md p-8 text-center max-w-md">
-            <h1 className="text-2xl font-bold text-[#12335B]">
-              FIR Draft Not Found
-            </h1>
-
-            <p className="text-gray-600 mt-3">
-              {error}
-            </p>
-
-            <Link
-              href="/police/new-fir?mode=resume"
-              onClick={() => sessionStorage.setItem('lawaid_fir_mode', 'resume')}
-              className="inline-block mt-6 bg-[#12335B] hover:bg-[#0d2949] text-white px-5 py-2.5 rounded-lg font-semibold transition"
-            >
-              Back to FIR Drafting
-            </Link>
-          </div>
+        <main className="mx-auto max-w-md px-4 py-20 text-center">
+          <h1 className="text-2xl font-bold text-[#12355b]">FIR Draft Not Found</h1>
+          <p className="mt-3 text-gray-600">{error}</p>
+          <Link href="/police/new-fir?mode=resume" onClick={() => sessionStorage.setItem('lawaid_fir_mode', 'resume')} className="mt-6 inline-block rounded bg-[#12355b] px-5 py-2.5 text-sm font-semibold text-white">Back to FIR Drafting</Link>
         </main>
-      </>
+      </div>
     )
   }
 
   return (
-    <>
+    <div className="min-h-screen bg-[#f5f3ee]">
       <Navbar />
-
-      <main className="min-h-screen bg-[#f8f6f1] px-4 py-8">
-        {/* Top controls */}
-        <div className="print:hidden max-w-6xl mx-auto mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <Link
-            href="/police/new-fir?mode=resume"
-            onClick={() => sessionStorage.setItem('lawaid_fir_mode', 'resume')}
-            className="border border-[#12335B] text-[#12335B] bg-white hover:bg-[#12335B]/5 px-5 py-2.5 rounded-xl text-xs font-semibold shadow-sm transition flex items-center gap-2"
-          >
-            ← Edit Draft
-          </Link>
-
-          <button
-            type="button"
-            onClick={handlePrint}
-            disabled={!pdfUrl}
-            className="bg-[#12335B] hover:bg-[#0d2949] text-white px-6 py-2.5 rounded-xl text-xs font-semibold shadow-md transition disabled:opacity-50 flex items-center gap-2"
-          >
-            🖨 Print / Save as PDF
-          </button>
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold text-[#12355b]">FIR Preview</h1>
+            <p className="text-sm text-gray-600">Review the exact saved draft before final approval.</p>
+          </div>
+          <div className="flex gap-2">
+            {!isFinal && <Link href="/police/new-fir?mode=resume" onClick={() => sessionStorage.setItem('lawaid_fir_mode', 'resume')} className="rounded bg-white px-4 py-2 text-sm font-medium text-[#12355b] shadow">Edit draft</Link>}
+            {pdfUrl && <a href={pdfUrl} download={isFinal ? 'final-fir.pdf' : 'fir-preview.pdf'} className="rounded bg-[#12355b] px-4 py-2 text-sm font-medium text-white">Download PDF</a>}
+            {pdfUrl && <button type="button" onClick={() => window.open(pdfUrl, '_blank')} className="rounded border border-[#12355b] bg-white px-4 py-2 text-sm font-medium text-[#12355b]">Print / Save PDF</button>}
+          </div>
         </div>
 
-        {/* FIR PDF */}
-        {pdfUrl && (
-          <div className="max-w-6xl mx-auto bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-300">
-            <iframe
-              src={pdfUrl}
-              title="Official IF1 FIR Document Preview"
-              className="w-full h-[85vh]"
-            />
-          </div>
+        {signature && (
+          <section className={`mb-5 rounded border p-4 ${isFinal ? 'border-green-300 bg-green-50' : 'border-amber-300 bg-amber-50'}`}>
+            <p className={`font-semibold ${isFinal ? 'text-green-800' : 'text-amber-800'}`}>{isFinal ? 'Signature Valid' : 'Signature Not Verified'}</p>
+            <p className="text-sm text-gray-700">Digitally signed by {signature.signed_by}</p>
+            <p className="text-sm text-gray-700">Date: {signature.signed_at}</p>
+          </section>
         )}
+
+        {!isFinal && form && (
+          <section className="mb-5 rounded border border-gray-200 bg-white p-4 shadow-sm">
+            <h2 className="font-semibold text-[#12355b]">Officer approval</h2>
+            <p className="mt-1 text-sm text-gray-600">Request and enter the one-time approval code to finalize this FIR. The PDF remains unverified until the code is accepted.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button onClick={requestOtp} type="button" className="rounded bg-[#12355b] px-4 py-2 text-sm font-medium text-white">{otpRequested ? 'Resend OTP' : 'Request OTP'}</button>
+              <input value={otp} onChange={(event) => setOtp(event.target.value)} inputMode="numeric" maxLength={6} placeholder="Enter 6-digit OTP" className="rounded border border-gray-300 px-3 py-2 text-sm" />
+              <button onClick={finalizeFir} type="button" disabled={!otp.trim() || approving} className="rounded bg-green-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{approving ? 'Finalizing…' : 'Finalize FIR'}</button>
+            </div>
+          </section>
+        )}
+
+        {error && <p className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+        {loading ? <p className="text-gray-600">Generating FIR preview…</p> : pdfUrl ? <iframe title="FIR PDF preview" src={pdfUrl} className="h-[75vh] w-full rounded border bg-white" /> : null}
       </main>
-    </>
+    </div>
   )
 }

@@ -82,6 +82,11 @@ export type FIRFormData = {
   dispatchTime: string
 
   statement?: string
+  digital_signature?: {
+    status: 'NOT_VERIFIED' | 'VALID'
+    signed_by: string
+    signed_at: string
+  }
 }
 
 /**
@@ -553,6 +558,37 @@ export async function generateFIRPdf(form: FIRFormData): Promise<Uint8Array> {
     y: yPos - 45,
     size: 8.5,
     font: fontBold,
+    color: rgb(0.2, 0.2, 0.2),
+  })
+
+  // Used only if the official template renderer is unavailable. The server
+  // never supplies VALID until the OTP-gated finalization succeeds.
+  const signature = form.digital_signature || {
+    status: 'NOT_VERIFIED' as const,
+    signed_by: form.officerName || 'Officer pending approval',
+    signed_at: new Date().toISOString(),
+  }
+  const signatureValid = signature.status === 'VALID'
+  const signatureColor = signatureValid ? rgb(0, 0.42, 0.18) : rgb(0.65, 0.12, 0.12)
+  currentPage.drawText(signatureValid ? 'Signature Valid' : 'Signature Not Verified', {
+    x: PAGE_WIDTH - MARGIN_RIGHT - 190,
+    y: yPos - 60,
+    size: 8,
+    font: fontBold,
+    color: signatureColor,
+  })
+  currentPage.drawText(`Digitally signed by ${cleanText(signature.signed_by)}`, {
+    x: PAGE_WIDTH - MARGIN_RIGHT - 190,
+    y: yPos - 70,
+    size: 6.5,
+    font,
+    color: rgb(0.2, 0.2, 0.2),
+  })
+  currentPage.drawText(`Date: ${cleanText(signature.signed_at)}`, {
+    x: PAGE_WIDTH - MARGIN_RIGHT - 190,
+    y: yPos - 79,
+    size: 6.5,
+    font,
     color: rgb(0.2, 0.2, 0.2),
   })
 
