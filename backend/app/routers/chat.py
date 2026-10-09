@@ -76,6 +76,8 @@ def send_message(body: ChatMessageRequest, current_user: User = Depends(get_curr
             })
             messages_list = [user_msg_obj]
         else:
+            if sess_doc.get("user_id") != current_user.id:
+                raise HTTPException(status_code=403, detail="Not authorized to use this chat session")
             collection.update_one(
                 {"_id": session_id},
                 {"$push": {"messages": user_msg_obj}, "$set": {"updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}}
@@ -93,6 +95,8 @@ def send_message(body: ChatMessageRequest, current_user: User = Depends(get_curr
             db.commit()
             messages_list = [user_msg_obj]
         else:
+            if chat_sess.user_id != current_user.id:
+                raise HTTPException(status_code=403, detail="Not authorized to use this chat session")
             try:
                 curr_msgs = json.loads(chat_sess.messages_json or "[]")
             except Exception:

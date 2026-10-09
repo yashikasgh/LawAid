@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Navbar from '@/components/Navbar'
-import { chatAPI } from '@/lib/api'
+import { apiFetch, chatAPI } from '@/lib/api'
 
 type Message = {
   role: 'user' | 'assistant'
@@ -260,10 +260,8 @@ export default function CitizenChatPage() {
 
   async function confirmDeleteSession(sid: string) {
     try {
-      const token = localStorage.getItem('lawaid_token')
-      const res = await fetch(`http://localhost:8000/api/chat/session/${sid}`, {
+      const res = await apiFetch(`/api/chat/session/${sid}`, {
         method: "DELETE",
-        headers: { "Authorization": `Bearer ${token}` }
       })
       if (res.ok) {
         setDeleteModalSessionId(null)
@@ -331,10 +329,7 @@ export default function CitizenChatPage() {
   
   async function loadSessions() {
     try {
-      const token = localStorage.getItem('lawaid_token')
-      const res = await fetch("http://localhost:8000/api/chat/sessions", {
-        headers: { "Authorization": `Bearer ${token}` }
-      })
+      const res = await apiFetch("/api/chat/sessions")
       if (res.ok) {
         const data = await res.json()
         setSessions(data)
@@ -369,10 +364,8 @@ export default function CitizenChatPage() {
   
   async function startNewChat() {
     try {
-      const token = localStorage.getItem('lawaid_token')
-      const res = await fetch("http://localhost:8000/api/chat/session", {
+      const res = await apiFetch("/api/chat/session", {
         method: "POST",
-        headers: { "Authorization": `Bearer ${token}` }
       })
       if (res.ok) {
         const data = await res.json()
@@ -392,10 +385,7 @@ export default function CitizenChatPage() {
   
   async function loadHistory(sid: string) {
     try {
-      const token = localStorage.getItem('lawaid_token')
-      const res = await fetch(`http://localhost:8000/api/chat/history/${sid}`, {
-        headers: { "Authorization": `Bearer ${token}` }
-      })
+      const res = await apiFetch(`/api/chat/history/${sid}`)
       if (res.ok) {
         const data = await res.json()
         if (data.messages && data.messages.length > 0) {
@@ -421,12 +411,10 @@ export default function CitizenChatPage() {
     setLoading(true)
 
     try {
-      const token = localStorage.getItem('lawaid_token')
-      const res = await fetch("http://localhost:8000/api/chat/message", {
+      const res = await apiFetch("/api/chat/message", {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
         },
         body: JSON.stringify({ session_id: sessionId, message: query })
       })

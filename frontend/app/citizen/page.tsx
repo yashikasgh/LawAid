@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import Navbar from '@/components/Navbar'
 import { getStoredUser } from '@/lib/auth'
+import { apiFetch } from '@/lib/api'
 
 export default function CitizenDashboard() {
   const [user, setUser] =
@@ -350,10 +351,7 @@ function ComplaintsHistory() {
   useEffect(() => {
     async function loadComplaints() {
       try {
-        const token = localStorage.getItem("access_token")
-        const res = await fetch("http://localhost:8000/api/complaints/my", {
-          headers: { "Authorization": `Bearer ${token}` }
-        })
+        const res = await apiFetch("/api/complaints/my")
         if (res.ok) {
           const data = await res.json()
           setComplaints(data)

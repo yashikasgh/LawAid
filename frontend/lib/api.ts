@@ -1,61 +1,69 @@
 // lib/api.ts
 import axios from 'axios'
 
-// This connects to the backend server
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+
+// This connects to the backend server. Authentication is carried by the
+// backend-issued HttpOnly session cookie, so every request must include
+// credentials; no token is ever read from or written to browser storage.
 export const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
+  baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' },
+  withCredentials: true,
 })
 
-function getClientToken(): string | null {
-  if (typeof window === 'undefined') return null
+// Endpoints whose 401 responses are handled by the calling page itself
+// (login form errors, session probes) and must never trigger a redirect.
+const AUTH_PROBE_PATHS = ['/auth/login', '/auth/register', '/auth/me', '/auth/logout', '/auth/forgot-password', '/auth/reset-password']
 
-  // 1. Try localStorage keys
-  const localToken = localStorage.getItem('lawaid_token') || localStorage.getItem('access_token')
-  if (localToken && localToken.trim()) return localToken.trim()
-
-  // 2. Fallback to document.cookie (lawaid_token)
-  if (typeof document !== 'undefined' && document.cookie) {
-    const match = document.cookie.match(/(?:^|;\s*)lawaid_token=([^;]*)/)
-    if (match && match[1]) {
-      const cookieToken = decodeURIComponent(match[1]).trim()
-      if (cookieToken) {
-        localStorage.setItem('lawaid_token', cookieToken)
-        return cookieToken
-      }
-    }
-  }
-
-  return null
+function redirectToLoginOnExpiredSession(requestPath: string | undefined) {
+  if (typeof window === 'undefined') return
+  if (requestPath && AUTH_PROBE_PATHS.some((p) => requestPath.includes(p))) return
+  const { pathname, search } = window.location
+  if (pathname.startsWith('/login') || pathname.startsWith('/register')) return
+  localStorage.removeItem('lawaid_user')
+  localStorage.removeItem('lawaid_role')
+  window.location.assign(`/login?next=${encodeURIComponent(pathname + search)}`)
 }
 
-// Automatically attach the login token to every request
-api.interceptors.request.use((config) => {
-  if (typeof window !== 'undefined') {
-    const token = getClientToken()
-    if (token) config.headers.Authorization = `Bearer ${token}`
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error?.response?.status === 401) {
+      redirectToLoginOnExpiredSession(error.config?.url)
+    }
+    return Promise.reject(error)
   }
-  return config
-})
+)
+
+// fetch() wrapper for pages that use the Fetch API directly. Uses the same
+// configured backend URL and sends the session cookie.
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(`${API_BASE_URL}${path}`, { ...init, credentials: 'include' })
+  if (res.status === 401) redirectToLoginOnExpiredSession(path)
+  return res
+}
 
 // UI shows 'Citizen' / 'Police' / 'Lawyer' (capitalized tabs), but backend
 // stores role as lowercase. Always convert before sending to the API.
 export const toApiRole = (uiRole: string) => uiRole.toLowerCase()
 
 // ── Auth ─────────────────────────────────────────────────────
-// NOTE: backend's /auth/login and /auth/register both use the same
-// UserCreate schema (email, password, role — role is REQUIRED), so
-// login must send role even though that's a little unusual.
 export const authAPI = {
   login: (email: string, password: string, role: string) =>
     api.post('/auth/login', { email, password, role: toApiRole(role) }),
 
-  register: (email: string, password: string, role: string) =>
-    api.post('/auth/register', { email, password, role: toApiRole(role) }),
+  register: (email: string, password: string) =>
+    api.post('/auth/register', { email, password, role: 'citizen' }),
 
   me: () => api.get('/auth/me'),
 
   logout: () => api.post('/auth/logout'),
+
+  forgotPassword: (email: string) => api.post('/auth/forgot-password', { email }),
+
+  resetPassword: (token: string, newPassword: string) =>
+    api.post('/auth/reset-password', { token, new_password: newPassword }),
 }
 
 // ── FIR ──────────────────────────────────────────────────────

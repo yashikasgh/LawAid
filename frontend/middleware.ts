@@ -20,9 +20,12 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
+  const loginUrl = new URL('/login', request.url)
+  loginUrl.searchParams.set('next', pathname + request.nextUrl.search)
+
   // No authentication token
   if (!token) {
-    return NextResponse.redirect(new URL('/login', request.url))
+    return NextResponse.redirect(loginUrl)
   }
 
   try {
@@ -42,12 +45,9 @@ export async function middleware(request: NextRequest) {
 
     // Invalid/expired token
     if (!response.ok) {
-      const response = NextResponse.redirect(
-        new URL('/login', request.url)
-      )
+      const response = NextResponse.redirect(loginUrl)
 
       response.cookies.delete('lawaid_token')
-      response.cookies.delete('lawaid_role')
 
       return response
     }
@@ -66,7 +66,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next()
   } catch {
     // Backend unavailable → don't allow protected access.
-    return NextResponse.redirect(new URL('/login', request.url))
+    return NextResponse.redirect(loginUrl)
   }
 }
 

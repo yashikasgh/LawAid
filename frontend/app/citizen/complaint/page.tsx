@@ -5,7 +5,7 @@ import Navbar from '@/components/Navbar'
 import CitizenSidebar from '@/components/CitizenSidebar'
 import StepProgress from '@/components/StepProgress'
 import Button from '@/components/Button'
-import { bnsAPI } from '@/lib/api'
+import { apiFetch, bnsAPI } from '@/lib/api'
 
 type AnalysisItem = {
   offence_type?: string
@@ -235,12 +235,10 @@ export default function ComplaintPage() {
                   onClick={async () => {
                     try {
                       setLoading(true)
-                      const token = localStorage.getItem('access_token')
-                      const res = await fetch('http://localhost:8000/api/complaints', {
+                      const res = await apiFetch('/api/complaints', {
                         method: 'POST',
                         headers: {
                           'Content-Type': 'application/json',
-                          'Authorization': `Bearer ${token}`
                         },
                         body: JSON.stringify({ complaint_text: complaint, detected_sections: supportedItems.map(i => i.section) })
                       })
