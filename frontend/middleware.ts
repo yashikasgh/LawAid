@@ -72,8 +72,11 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
+    '/citizen',
     '/citizen/:path*',
+    '/police',
     '/police/:path*',
+    '/lawyer',
     '/lawyer/:path*',
   ],
 }

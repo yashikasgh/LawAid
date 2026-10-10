@@ -166,7 +166,7 @@ def _extract_factual_heuristics(
     val_str = "Unknown"
     lower_text = text.lower()
     
-    m_prop = re.search(r'\b(?:stolen|took|grabbed|snatched)?\s*([a-z0-9\s,-]+?(?:phone|mobile|smartphone|wallet|purse|vehicle|motorcycle|car|watch|laptop|chain|jewellery|jewelry|gold|cash))\b', text, re.I)
+    m_prop = re.search(r'\b(?:stolen|took|grabbed|snatched)\s+([a-zA-Z0-9\s]{1,30}?(?:phone|mobile|smartphone|wallet|purse|vehicle|motorcycle|car|watch|laptop|chain|jewellery|jewelry|gold|cash))\b', text, re.I)
     if m_prop:
         prop_str = m_prop.group(0).strip()
     elif "phone" in lower_text or "mobile" in lower_text:

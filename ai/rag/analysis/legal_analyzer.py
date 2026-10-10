@@ -242,7 +242,7 @@ class GroqLLMClient(LLMClient):
                 "model": self.model_name,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.0,
-                "timeout": 15.0
+                "timeout": 10.0
             }
             if is_json_mode:
                 req_kwargs["response_format"] = {"type": "json_object"}
@@ -291,11 +291,16 @@ class GeminiLLMClient(LLMClient):
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY environment variable is missing.")
 
-        self.model_name = model_name or os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash"
+        self.model_name = model_name or os.environ.get("GEMINI_MODEL") or "gemini-3.8-flash"
 
         try:
             from google import genai
-            self.client = genai.Client(api_key=self.api_key)
+            from google.genai import types
+            try:
+                http_opts = types.HttpOptions(timeout=12000)
+                self.client = genai.Client(api_key=self.api_key, http_options=http_opts)
+            except Exception:
+                self.client = genai.Client(api_key=self.api_key)
         except Exception as e:
             raise RuntimeError(f"Failed to initialize Gemini client for model '{self.model_name}': {e}")
 
@@ -315,10 +320,8 @@ class GeminiLLMClient(LLMClient):
 
             gen_config = types.GenerateContentConfig(**config_kwargs)
 
-            # Candidate model list bounded to active valid models
+            # Single target model attempt for request efficiency
             candidate_models = [self.model_name]
-            if "gemini-flash-latest" not in candidate_models:
-                candidate_models.append("gemini-flash-latest")
 
             last_error = None
             for model_id in candidate_models:
@@ -451,7 +454,7 @@ class OpenRouterLLMClient(LLMClient):
                 client = OpenAI(
                     base_url=self.base_url,
                     api_key=self.api_key,
-                    timeout=30.0,
+                    timeout=12.0,
                     max_retries=0,
                     default_headers={
                         "HTTP-Referer": "https://lawaid.app",
@@ -480,7 +483,7 @@ class OpenRouterLLMClient(LLMClient):
                         f"{self.base_url}/chat/completions",
                         headers=headers,
                         json=payload,
-                        timeout=30
+                        timeout=12
                     )
                     if resp.status_code != 200:
                         raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
@@ -501,7 +504,7 @@ class OpenRouterLLMClient(LLMClient):
                         method="POST"
                     )
                     try:
-                        with urllib.request.urlopen(req, timeout=30) as resp:
+                        with urllib.request.urlopen(req, timeout=12) as resp:
                             res_body = resp.read().decode("utf-8")
                             data = json.loads(res_body)
                             choices = data.get("choices", [])
@@ -584,7 +587,7 @@ class ProviderHealthTracker:
             info = self._health_map.get(key, {"consecutive_failures": 0})
             failures = info.get("consecutive_failures", 0) + 1
 
-            if error_category == "payment_required" or "402" in err_msg:
+            if error_category in ("payment_required", "quota_exhausted") or "402" in err_msg or "quota" in err_lower or "resource_exhausted" in err_lower or "insufficient_quota" in err_lower:
                 status = ProviderHealthStatus.QUOTA_EXHAUSTED
                 cooldown_sec = 3600
             elif "401" in err_msg or "user not found" in err_lower or "unauthorized" in err_lower:
@@ -643,9 +646,9 @@ def _classify_llm_error(err_msg: str) -> str:
     err_lower = err_msg.lower()
     if "401" in err_msg or "user not found" in err_lower or "unauthorized" in err_lower or "invalid api key" in err_lower:
         return "auth_disabled"
-    elif "402" in err_msg or "payment required" in err_lower or "insufficient_quota" in err_lower or "credit" in err_lower:
-        return "payment_required"
-    elif "429" in err_msg or "rate limit" in err_lower or "rate_limit" in err_lower or "quota" in err_lower or "resource_exhausted" in err_lower:
+    elif "402" in err_msg or "payment required" in err_lower or "insufficient_quota" in err_lower or "credit" in err_lower or "quota" in err_lower or "resource_exhausted" in err_lower or "free_tier_exceeded" in err_lower:
+        return "quota_exhausted"
+    elif "429" in err_msg or "rate limit" in err_lower or "rate_limit" in err_lower:
         return "rate_limited"
     elif "413" in err_msg or "too large" in err_lower or "context_length_exceeded" in err_lower or "request entity too large" in err_lower:
         return "request_too_large"
@@ -697,7 +700,8 @@ class MultiProviderLLMFailoverClient(LLMClient):
         # 2. Gemini
         if gemini_key:
             try:
-                chain.append(GeminiLLMClient(api_key=gemini_key, model_name="gemini-3.6-flash"))
+                gemini_model = os.environ.get("GEMINI_MODEL") or "gemini-3.8-flash"
+                chain.append(GeminiLLMClient(api_key=gemini_key, model_name=gemini_model))
             except Exception as e:
                 print(f"[LLM Failover Config Warning] Gemini init skipped: {e}")
 
@@ -711,7 +715,8 @@ class MultiProviderLLMFailoverClient(LLMClient):
         # 4. OpenRouter Default Router
         if openrouter_key:
             try:
-                chain.append(OpenRouterLLMClient(api_key=openrouter_key))
+                openrouter_model = os.environ.get("OPENROUTER_MODEL") or "openrouter/free"
+                chain.append(OpenRouterLLMClient(api_key=openrouter_key, model_name=openrouter_model))
             except Exception as e:
                 print(f"[LLM Failover Config Warning] OpenRouter default init skipped: {e}")
 
@@ -784,7 +789,8 @@ class MultiProviderLLMFailoverClient(LLMClient):
         self,
         prompt: str,
         max_tokens: Optional[int] = None,
-        workload: Union[Workload, str] = Workload.CITIZEN_FIR_ANALYSIS
+        workload: Union[Workload, str] = Workload.CITIZEN_FIR_ANALYSIS,
+        request_budget_sec: float = 25.0
     ) -> str:
         self.last_execution_trace = []
         self.active_provider_info = {}
@@ -801,8 +807,13 @@ class MultiProviderLLMFailoverClient(LLMClient):
         is_large = tot_est_tokens > GROQ_SAFE_REQUEST_TOKEN_BUDGET
 
         ordered_providers = self._get_ordered_providers(workload, is_large)
+        start_overall = time.time()
 
         for provider_client in ordered_providers:
+            if time.time() - start_overall >= request_budget_sec:
+                print(f"[LLM Failover Trace] Overall request time budget ({request_budget_sec}s) exceeded. Aborting failover chain.")
+                break
+
             provider_name = provider_client.__class__.__name__
             model_name = getattr(provider_client, "model_name", "unknown")
 
@@ -871,6 +882,10 @@ class MultiProviderLLMFailoverClient(LLMClient):
         if not attempted_any:
             print("[LLM Failover Trace] All providers were skipped on health check. Forcing attempt on available providers...")
             for provider_client in ordered_providers:
+                if time.time() - start_overall >= request_budget_sec:
+                    print(f"[LLM Failover Trace] Forced fallback overall request time budget ({request_budget_sec}s) exceeded. Aborting.")
+                    break
+
                 provider_name = provider_client.__class__.__name__
                 model_name = getattr(provider_client, "model_name", "unknown")
                 status, _ = self.health_tracker.get_status(provider_client)
@@ -1001,13 +1016,13 @@ def construct_analysis_prompt(legal_context_obj: Dict[str, Any], minimal_schema:
             "5. Do NOT invent, normalize, abbreviate, or transform document IDs.\n"
             "6. Only use document IDs that appear in the supplied RETRIEVED BNS LEGAL CONTEXT.\n"
             "7. EVALUATE FOUR GENERALIZED GROUNDING STATES:\n"
-            "   - 'established' (or 'supported'): Mark ONLY if explicitly stated facts satisfy ALL mandatory statutory elements without requiring any further confirmation or unstated facts.\n"
-            "   - 'potentially_applicable' (or 'uncertain'): Mark if some statutory elements fit, but one or more material statutory facts are missing or unstated.\n"
-            "   - 'not_supported': Mark if stated facts explicitly fail or contradict required statutory elements.\n"
-            "   - 'insufficient_information': Mark if key facts are unstated so applicability cannot be assessed at all.\n"
-            "8. STRICT CONSISTENCY RULE: If a provision is marked 'established', your reasoning MUST NOT state that material facts, intent requirements, or circumstances still need confirmation.\n"
-            "9. STATUTORY PUNISHMENT SAFEGUARD: Preserve statutory maximums and alternatives (e.g. 'may extend to X years' or 'up to X years'). Never state a maximum ceiling as a mandatory fixed sentence.\n"
-            "10. Do NOT invent missing facts.\n\n"
+            "   - 'established' (or 'supported'): Mark ONLY if explicitly stated facts directly satisfy ALL mandatory statutory elements in the retrieved statutory text without requiring any further assumptions or unstated facts.\n"
+            "   - 'potentially_applicable' (or 'uncertain'): Mark if some statutory elements fit, but one or more material statutory facts, prerequisites, or capacity elements are missing or unstated.\n"
+            "   - 'not_supported': Mark if stated facts explicitly fail, contradict, or lack evidence for required statutory elements (e.g., alleging a missing item without evidence that any person took it, or alleging theft without servant/clerk capacity).\n"
+            "   - 'insufficient_information': Mark if key facts are unstated so statutory applicability cannot be evaluated at all.\n"
+            "8. STRICT EVIDENCE GROUNDING RULE: Base explanations strictly on retrieved statutory text and explicitly stated incident facts. Do NOT infer missing statutory elements, invent facts, or assume criminal intent where facts are unstated.\n"
+            "9. STRICT CONSISTENCY RULE: If a provision is marked 'established', your reasoning MUST NOT state that material facts, intent requirements, or circumstances still need confirmation.\n"
+            "10. STATUTORY PUNISHMENT SAFEGUARD: Preserve statutory maximums and alternatives (e.g. 'may extend to X years' or 'up to X years'). Never state a maximum ceiling as a mandatory fixed sentence.\n\n"
             "JSON OUTPUT SCHEMA FORMAT:\n"
             "{\n"
             '  "status": "success",\n'
@@ -1184,16 +1199,19 @@ def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj:
         doc_id = item.get("document_id")
         if doc_id and doc_id not in doc_map:
             doc_id_lower = str(doc_id).lower().strip()
+            doc_sec_match = re.search(r'\b\d+\b', doc_id_lower)
+            doc_sec_num = doc_sec_match.group() if doc_sec_match else ""
             for k in doc_map.keys():
                 k_lower = k.lower()
                 sec_in_k = str(doc_map[k][0].get("section", "")).strip()
+                sec_in_k_num = re.search(r'\b\d+\b', sec_in_k).group() if re.search(r'\b\d+\b', sec_in_k) else sec_in_k
                 if (
                     k_lower == doc_id_lower
                     or k_lower == f"bns_{doc_id_lower}"
                     or doc_id_lower == f"bns_{k_lower}"
                     or k_lower.startswith(f"{doc_id_lower}_")
                     or k_lower.startswith(f"{doc_id_lower}(")
-                    or (sec_in_k and sec_in_k in doc_id_lower)
+                    or (sec_in_k_num and doc_sec_num and sec_in_k_num == doc_sec_num)
                 ):
                     doc_id = k
                     item["document_id"] = k
@@ -1206,7 +1224,9 @@ def validate_and_ground_analysis(parsed_data: Dict[str, Any], legal_context_obj:
             if sec_search:
                 target_sec = sec_search.group()
                 for k, (d_info, g_off) in doc_map.items():
-                    if str(d_info.get("section", "")).strip() == target_sec:
+                    sec_in_d = str(d_info.get("section", "")).strip()
+                    sec_in_d_num = re.search(r'\b\d+\b', sec_in_d).group() if re.search(r'\b\d+\b', sec_in_d) else sec_in_d
+                    if sec_in_d_num == target_sec:
                         doc_id = k
                         item["document_id"] = k
                         break

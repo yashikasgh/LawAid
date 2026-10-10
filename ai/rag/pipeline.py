@@ -241,6 +241,7 @@ def pack_candidates_by_section(
 
 def run_pipeline(
     raw_incident: str,
+    history_context: Optional[str] = None,
     llm_client: Optional[LLMClient] = None,
     top_k_retrieval: int = 20,
     top_k_rerank: int = 15,
@@ -294,6 +295,12 @@ def run_pipeline(
     if not queries and sanitized_text:
         queries = [sanitized_text]
 
+    # Include a history context retrieval query for genuine follow-ups without mutating sanitized_text or raw_incident
+    if history_context:
+        hist_sanitized = sanitize_text(history_context).get("sanitized_text", "")
+        if hist_sanitized:
+            queries.append(f"{hist_sanitized} {sanitized_text}")
+
     # 5. ChromaDB Multi-Query Retrieval
     all_retrieved_candidates: List[Dict[str, Any]] = []
     for q_str in queries:
@@ -309,21 +316,24 @@ def run_pipeline(
         except Exception:
             continue
 
-    # Filter candidates to targeted FIR sections if explicit target_sections are specified
+    # Prioritize candidates matching targeted FIR sections while preserving general vector retrieval candidates
     if target_sections:
         filtered_candidates = []
+        other_candidates = []
         target_nums = set()
         for ts in target_sections:
-            m = re.match(r'\d+', ts)
+            m = re.search(r'\d+', str(ts))
             if m:
                 target_nums.add(m.group())
         for cand in all_retrieved_candidates:
             cand_sec = str(cand.get("section", "")).strip()
-            cand_num = re.match(r'\d+', cand_sec)
+            cand_num = re.search(r'\d+', cand_sec)
             if cand_num and cand_num.group() in target_nums:
                 filtered_candidates.append(cand)
+            else:
+                other_candidates.append(cand)
         if filtered_candidates:
-            all_retrieved_candidates = filtered_candidates
+            all_retrieved_candidates = filtered_candidates + other_candidates
 
     # 6. Section-Level RRF Reranking across candidate pool
     if analysis_candidate_limit is not None:
@@ -567,24 +577,81 @@ def run_chat_pipeline(
     sentiment_info = detect_sentiment(raw_message)
     empathy_guide = sentiment_info.get("empathy_guide", "")
 
-    # 2. Formulate effective incident text combining history for follow-up questions
-    effective_incident = raw_message
+    # 2. History & Follow-up Context Analysis
     history_str = ""
+    is_follow_up = False
+    retrieval_history_context = None
+
     if history:
-        past_user_msgs = [m.get("content", "") for m in history if m.get("role") == "user" and m.get("content")]
         formatted_history = []
         for m in history[-6:]:
             role_label = "Citizen" if m.get("role") == "user" else "Assistant"
             formatted_history.append(f"{role_label}: {m.get('content', '')}")
         history_str = "\n".join(formatted_history)
 
-        # If current query is short or a follow-up inquiry, combine previous user incident context
-        if past_user_msgs and len(raw_message.split()) < 15:
-            effective_incident = f"{' '.join(past_user_msgs[-2:])} {raw_message}"
+        raw_lower = raw_message.lower().strip()
+        words = set(re.findall(r'\b\w+\b', raw_lower))
 
-    # 3. Execute grounded RAG pipeline (using deterministic query generation for Chat to optimize latency)
+        deictic_terms = {
+            "this", "that", "it", "these", "those", "above", "aforesaid",
+            "previous", "earlier", "same", "the section", "the offence",
+            "the crime", "the punishment", "the penalty", "the officer",
+            "the incident", "the accused", "the victim", "the property",
+            "the police", "the fir"
+        }
+        deictic_phrases = [
+            "the section", "the offence", "the crime", "the punishment",
+            "the penalty", "the officer", "the incident", "the accused",
+            "the victim", "the property", "the police", "the fir",
+            "above section", "previous section", "earlier section"
+        ]
+        has_deictic_ref = any(w in deictic_terms for w in words) or any(dp in raw_lower for dp in deictic_phrases)
+
+        follow_up_legal_terms = {
+            "bailable", "cognizable", "punishment", "penalty", "jail", "imprisonment",
+            "fine", "bail", "fir", "police", "court", "procedure", "section", "clause",
+            "sub-section", "subsection", "offence", "offense", "crime", "punishable",
+            "compoundable", "warrant", "arrest"
+        }
+        has_legal_follow_up_term = any(w in follow_up_legal_terms for w in words)
+
+        inquiry_starts = ("is ", "was ", "can ", "what ", "how ", "which ", "where ", "does ", "will ", "should ", "who ", "why ", "could ", "would ")
+        is_question = raw_lower.endswith("?") or raw_lower.startswith(inquiry_starts)
+
+        # Follow-up context handling: extract cited statutory sections & user incident context from recent turns
+        if has_deictic_ref or (is_question and has_legal_follow_up_term):
+            is_follow_up = True
+            cited_sections = []
+            user_incidents = []
+
+            for m in reversed(history[-6:]):
+                content = m.get("content", "")
+                if not content:
+                    continue
+                role = m.get("role")
+                if role == "assistant":
+                    found_secs = re.findall(r'\b(?:BNS|BNSS)?\s*(?:Section|Sec\.)\s*(\d+[A-Z]?(?:\(\d+\))?)', content, re.IGNORECASE)
+                    for sec in found_secs:
+                        sec_num = sec.strip()
+                        if sec_num not in cited_sections:
+                            cited_sections.append(sec_num)
+                elif role == "user":
+                    user_incidents.append(content)
+
+            if cited_sections:
+                sec_refs = [f"BNS Section {s}" for s in cited_sections[:2]]
+                retrieval_history_context = " ".join(sec_refs)
+                if user_incidents:
+                    retrieval_history_context += " " + user_incidents[0]
+            elif user_incidents:
+                retrieval_history_context = user_incidents[0]
+        else:
+            is_follow_up = False
+
+    # 3. Execute grounded RAG pipeline (USER QUERY is preserved strictly as raw_message)
     pipeline_res = run_pipeline(
-        raw_incident=effective_incident,
+        raw_incident=raw_message,
+        history_context=retrieval_history_context if is_follow_up else None,
         llm_client=llm_client,
         use_deterministic_queries=True,
         workload=Workload.LEGAL_CHAT
@@ -681,7 +748,7 @@ def run_chat_pipeline(
         if app == "not_supported":
             continue
 
-        if app in ["supported", "established"]:
+        if app != "not_supported":
             formatted_sections.append(label)
 
         structured_chat_context.append({
@@ -720,7 +787,7 @@ def run_chat_pipeline(
         "     * Repeat conviction: rigorous imprisonment of 1 to 5 years AND fine (applies ONLY if accused has a prior theft conviction).\n"
         "     * Petty theft proviso (<₹5,000 + restoration): community service upon first conviction.\n"
         "     * NEVER state 1–5 years RI as the ordinary punishment for simple theft.\n"
-        "8. Refer to BNS sections strictly as 'Section <number>' or 'BNS Section <number>' (e.g., Section 303, Section 329). NEVER mention IPC sections.\n"
+        "8. STATUTE IDENTIFICATION RULE: Use the retrieved source metadata to distinguish BNS substantive offence provisions from BNSS procedural provisions. Refer to substantive offence sections as 'BNS Section <number>' or 'Section <number> of BNS'. Refer to procedural sections strictly as 'BNSS Section <number>' or 'Section <number> of BNSS'. NEVER mislabel BNSS procedural provisions as BNS, and NEVER mention IPC or CrPC.\n"
         "9. Expand BNS strictly as 'Bharatiya Nyaya Sanhita, 2023' and BNSS strictly as 'Bharatiya Nagarik Suraksha Sanhita, 2023'.\n"
         "10. STRICT LEGAL ASSISTANT STATUS & CONDITIONAL LANGUAGE RULES:\n"
         "    - NEVER label a section as 'Established' or claim that an offence is legally established or proven. An AI assistant must never conclude that an offence is established merely because the described facts appear consistent with statutory elements.\n"
@@ -742,7 +809,7 @@ def run_chat_pipeline(
         "For neutral queries, proceed directly with a polite, professional tone. "
         "For immediate danger or emergency, include a concise safety warning. "
         "CRITICAL: Sentiment and empathy must NEVER change legal facts, retrieved sections, punishments, procedural classifications, or legal conclusions.\n"
-        "14. CONVERSATIONAL CONTEXT: Use the CONVERSATION HISTORY to naturally answer follow-up questions without requiring the user to repeat prior details.\n"
+        "14. CONVERSATIONAL CONTEXT: Use the CONVERSATION HISTORY to naturally answer genuine follow-up questions without requiring the user to repeat prior details. IF the CONVERSATION HISTORY contains multiple cited sections and the USER QUERY ('the section') does not specify which one, politely ask the user to clarify which section they are referring to. IF the USER QUERY presents a new standalone incident or topic, address the USER QUERY independently without treating historical background as facts about the current incident unless the user explicitly connects them.\n"
         "15. FORMATTING: Use clean Markdown (bold headings with **text**, bullet points, numbered lists, and paragraphs). Do NOT output literal single-asterisk markdown or raw code blocks.\n"
         "16. Return ONLY valid JSON matching this schema:\n"
         '{\n  "reply": "string (conversational response text formatted in Markdown)"\n}\n\n'
