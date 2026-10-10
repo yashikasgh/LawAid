@@ -205,25 +205,25 @@ export default function LawyerDocumentsPage() {
       <main className="relative min-h-screen overflow-hidden">
         <div className="fixed inset-0 -z-10">
           <img
-            src="/images/lawaid-citizen-dashboard.png"
+            src="/images/lawaid-feature-bg.png"
             alt=""
             className="h-full w-full object-cover object-center"
           />
         </div>
 
-        <div className="fixed inset-0 -z-10 bg-[#f7f4ec]/55" />
+        <div className="fixed inset-0 -z-10 bg-[#f8f6f1]/10" />
 
         <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
           <header className="mb-8 text-center">
-            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[#98701f]">
+            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white">
               Lawyer Portal
             </p>
 
-            <h1 className="mt-3 font-serif text-4xl font-semibold tracking-tight text-[#0f305b] md:text-5xl">
+            <h1 className="mt-3 font-serif text-4xl font-semibold tracking-tight text-[#cc8427] md:text-5xl">
               Case Documents
             </h1>
 
-            <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-[#36516e] md:text-base">
+            <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-[#dca45a] md:text-base">
               Upload and organize case files before reviewing the information extracted from them.
             </p>
           </header>

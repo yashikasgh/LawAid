@@ -68,7 +68,7 @@ export default function LawyerDashboard() {
             className="h-full w-full object-cover object-center"
           />
         </div>
-        <div className="fixed inset-0 -z-10 bg-[#f7f4ec]/55" />
+        <div className="fixed inset-0 -z-10 bg-white/25" />
 
         <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8">
           {/* Welcome section */}

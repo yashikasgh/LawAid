@@ -150,3 +150,55 @@ export const firDraftsAPI = {
   deleteDraft: (draftId: string) => api.delete(`/fir/drafts/${draftId}`),
 }
 
+// Lawyer case documents
+export const lawyerDocumentsAPI = {
+  workspace: () => api.post('/lawyer/cases/workspace'),
+  list: (caseId: string) => api.get(`/lawyer/cases/${caseId}/documents`),
+  metrics: (caseId: string) => api.get(`/lawyer/cases/${caseId}/documents/metrics`),
+  upload: (caseId: string, files: File[], onProgress?: (percent: number) => void) => {
+    const form = new FormData()
+    files.forEach((file) => form.append('files', file))
+    return api.post(`/lawyer/cases/${caseId}/documents`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (event) => {
+        if (event.total && onProgress) {
+          onProgress(Math.round((event.loaded / event.total) * 100))
+        }
+      },
+    })
+  },
+  remove: (caseId: string, documentId: string) =>
+    api.delete(`/lawyer/cases/${caseId}/documents/${documentId}`),
+  retry: (caseId: string, documentId: string) =>
+    api.post(`/lawyer/cases/${caseId}/documents/${documentId}/retry`),
+  analyze: (caseId: string) =>
+    api.post(`/lawyer/cases/${caseId}/documents/analyze`),
+}
+
+export const lawyerCaseAPI = {
+  get: (caseId: string) => api.get(`/lawyer/cases/${caseId}`),
+  analyze: (caseId: string) => api.post(`/lawyer/cases/${caseId}/analyze`),
+  getAnalysis: (caseId: string) => api.get(`/lawyer/cases/${caseId}/analysis`),
+  saveAnalysis: (caseId: string, payload: unknown) =>
+    api.patch(`/lawyer/cases/${caseId}/analysis`, { payload }),
+  getTimeline: (
+    caseId: string,
+    params?: {
+      event_type?: string
+      source_document_id?: string
+      date_from?: string
+      date_to?: string
+      order?: 'oldest' | 'newest'
+    },
+  ) => api.get(`/lawyer/cases/${caseId}/timeline`, { params }),
+  updateTimeline: (caseId: string, eventId: string, payload: unknown) =>
+    api.patch(`/lawyer/cases/${caseId}/timeline/${eventId}`, payload),
+  getSummary: (caseId: string) =>
+    api.get(`/lawyer/cases/${caseId}/summary`),
+  saveSummary: (
+    caseId: string,
+    payload: { executive_summary: string; current_stage?: string | null },
+  ) => api.patch(`/lawyer/cases/${caseId}/summary`, payload),
+  export: (caseId: string, options: Record<string, boolean>) =>
+    api.post(`/lawyer/cases/${caseId}/export`, options, { responseType: 'blob' }),
+}

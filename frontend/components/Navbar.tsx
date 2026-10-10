@@ -17,6 +17,7 @@ export default function Navbar() {
   }, [path])
 
   const role = user?.role?.toLowerCase()
+  const isLawyerSection = path === '/lawyer' || path.startsWith('/lawyer/')
 
   const links =
     role === 'citizen'
@@ -34,13 +35,22 @@ export default function Navbar() {
             { href: '/police/new-fir?mode=new', label: 'Draft FIR' },
             { href: '/bns-search', label: 'BNS Search' },
           ]
-        : [
-            { href: '/', label: 'Home' },
-            { href: '/bns-search', label: 'BNS Search' },
-            { href: '/citizen', label: 'Citizen' },
-            { href: '/police', label: 'Police' },
-            { href: '/lawyer', label: 'Lawyer' },
-          ]
+        : isLawyerSection
+          ? [
+              { href: '/', label: 'Home' },
+              { href: '/lawyer', label: 'Lawyer' },
+              { href: '/lawyer/documents', label: 'Documents' },
+              { href: '/lawyer/analysis', label: 'Analysis' },
+              { href: '/lawyer/timeline', label: 'Timeline' },
+              { href: '/lawyer/summary', label: 'Summary & Export' },
+            ]
+          : [
+              { href: '/', label: 'Home' },
+              { href: '/bns-search', label: 'BNS Search' },
+              { href: '/citizen', label: 'Citizen' },
+              { href: '/police', label: 'Police' },
+              { href: '/lawyer', label: 'Lawyer' },
+            ]
 
   async function handleLogout() {
     await logout()
@@ -51,7 +61,9 @@ export default function Navbar() {
     router.refresh()
   }
 
-  async function handleHomeClick(event: React.MouseEvent<HTMLAnchorElement>) {
+  async function handleHomeClick(
+    event: React.MouseEvent<HTMLAnchorElement>,
+  ) {
     if (!user) {
       return
     }
@@ -76,32 +88,43 @@ export default function Navbar() {
         <span className="text-gold">⚖</span> LawAid
       </Link>
 
-      <div className="flex gap-8">
-        {links.map((l) => (
-          <Link
-            key={l.href}
-            href={l.href}
-            onClick={(e) => {
-              if (l.href === '/') {
-                handleHomeClick(e)
-              } else if (l.href.includes('/police/new-fir')) {
-                if (typeof window !== 'undefined') {
-                  sessionStorage.setItem('lawaid_fir_mode', 'new')
-                  sessionStorage.removeItem('lawaid_fir_draft')
-                  sessionStorage.removeItem('lawaid_draft_id')
-                  localStorage.removeItem('lawaid_fir_draft')
+      <div className="flex flex-wrap items-center gap-4 lg:gap-8">
+        {links.map((link) => {
+          const isActive =
+            link.href === '/'
+              ? path === '/'
+              : link.href === '/lawyer'
+                ? path === '/lawyer'
+                : path === link.href ||
+                  (link.href !== '/lawyer' &&
+                    path.startsWith(`${link.href}/`))
+
+          return (
+            <Link
+              key={link.href}
+              href={link.href}
+              onClick={(event) => {
+                if (link.href === '/') {
+                  handleHomeClick(event)
+                } else if (link.href.includes('/police/new-fir')) {
+                  if (typeof window !== 'undefined') {
+                    sessionStorage.setItem('lawaid_fir_mode', 'new')
+                    sessionStorage.removeItem('lawaid_fir_draft')
+                    sessionStorage.removeItem('lawaid_draft_id')
+                    localStorage.removeItem('lawaid_fir_draft')
+                  }
                 }
-              }
-            }}
-            className={`text-sm font-medium hover:text-gold transition ${
-              path === l.href
-                ? 'text-gold border-b-2 border-gold'
-                : 'text-white'
-            }`}
-          >
-            {l.label}
-          </Link>
-        ))}
+              }}
+              className={`text-sm font-medium hover:text-gold transition ${
+                isActive
+                  ? 'text-gold border-b-2 border-gold'
+                  : 'text-white'
+              }`}
+            >
+              {link.label}
+            </Link>
+          )
+        })}
       </div>
 
       {user ? (
