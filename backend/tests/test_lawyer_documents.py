@@ -135,6 +135,36 @@ def test_case_documents_are_owner_scoped_and_route_requires_lawyer_role(database
     assert any(dependency.call.__name__ == "role_checker" for dependency in route.dependant.dependencies)
 
 
+def test_delete_preserves_record_when_storage_deletion_fails(database, monkeypatch):
+    db, storage = database
+    lawyer = make_user(db, "lawyer", "delete-failure@example.com")
+    case_id = workspace(db, lawyer)
+    document = lawyer_documents.CaseDocument(
+        case_id=case_id, uploaded_by=lawyer.id, original_filename="evidence.pdf",
+        file_type="pdf", content_type="application/pdf", size_bytes=100,
+        storage_ref=str(storage.put(b"stored")), status="parsed", progress=100,
+        extracted_text="Readable native document text", extracted_entities="[]", ocr_used=False,
+    )
+    db.add(document); db.commit(); db.refresh(document)
+    def unavailable(_identifier):
+        raise RuntimeError("GridFS down")
+    monkeypatch.setattr(storage, "delete", unavailable)
+    with pytest.raises(HTTPException) as error:
+        lawyer_documents.delete_document(case_id, document.id, lawyer, db)
+    assert error.value.status_code == 503
+    assert lawyer_documents.list_documents(case_id, lawyer, db)[0]["id"] == document.id
+
+
+def test_delete_is_owner_scoped(database):
+    db, _ = database
+    owner = make_user(db, "lawyer", "delete-owner@example.com")
+    other = make_user(db, "lawyer", "delete-other@example.com")
+    case_id = workspace(db, owner)
+    with pytest.raises(HTTPException) as error:
+        lawyer_documents.delete_document(case_id, "not-a-document", other, db)
+    assert error.value.status_code == 404
+
+
 def test_analysis_endpoint_requires_parsed_documents_and_is_honest_about_scope(database):
     db, _ = database
     lawyer = make_user(db, "lawyer", "analysis@example.com")

@@ -102,11 +102,12 @@ def update_summary(case_id: str, body: SummaryPatch, current_user: User = Depend
 
 @router.post("/cases/{case_id}/export")
 def export_case(case_id: str, options: ExportOptions, current_user: User = Depends(require_role("lawyer")), db: Session = Depends(get_db)):
+    def _esc(t): return escape(str(t or "")).encode("ascii", "xmlcharrefreplace").decode("ascii")
     summary = get_summary(case_id, current_user, db); documents = db.query(CaseDocument).filter(CaseDocument.case_id == case_id).all(); stream=BytesIO(); styles=getSampleStyleSheet(); story=[Paragraph("LawAid Case Package", styles["Title"])]
-    if options.include_executive_summary: story += [Paragraph("Executive Summary", styles["Heading2"]), Paragraph(escape(summary["executive_summary"] or "Not provided."), styles["BodyText"])]
+    if options.include_executive_summary: story += [Paragraph("Executive Summary", styles["Heading2"]), Paragraph(_esc(summary["executive_summary"] or "Not provided."), styles["BodyText"])]
     if options.include_timeline:
-        story.append(Paragraph("Case Timeline", styles["Heading2"])); story += [Paragraph(escape(f"{e['date']} {e['title']}: {e['description']}"), styles["BodyText"]) for e in summary["timeline_preview"]]
-    if options.include_key_facts: story += [Paragraph("Key Facts", styles["Heading2"])] + [Paragraph(escape(f.get("text", "")), styles["BodyText"]) for f in summary["key_facts"]]
-    if options.include_bns_sections: story += [Paragraph("Potential BNS Sections", styles["Heading2"])] + [Paragraph(escape(f"Section {s['section_number']} (source-linked; requires legal review)"), styles["BodyText"]) for s in summary["bns_sections"]]
-    if options.include_original_documents: story += [Paragraph("Original Document Appendix", styles["Heading2"])] + [Paragraph(escape(f"{d.original_filename} ({d.status})"), styles["BodyText"]) for d in documents]
+        story.append(Paragraph("Case Timeline", styles["Heading2"])); story += [Paragraph(_esc(f"{e.event_date} {e.title}: {e.description}"), styles["BodyText"]) for e in _timeline(case_id, db)]
+    if options.include_key_facts: story += [Paragraph("Key Facts", styles["Heading2"])] + [Paragraph(_esc(f.get("text", "")), styles["BodyText"]) for f in summary["key_facts"]]
+    if options.include_bns_sections: story += [Paragraph("Potential BNS Sections", styles["Heading2"])] + [Paragraph(_esc(f"Section {s['section_number']} (source-linked; requires legal review)"), styles["BodyText"]) for s in summary["bns_sections"]]
+    if options.include_original_documents: story += [Paragraph("Original Document Appendix", styles["Heading2"])] + [Paragraph(_esc(f"{d.original_filename} ({d.status})"), styles["BodyText"]) for d in documents]
     SimpleDocTemplate(stream, pagesize=A4).build(story); stream.seek(0); return StreamingResponse(stream, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="case-package-{case_id}.pdf"'})

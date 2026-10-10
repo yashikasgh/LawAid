@@ -88,3 +88,16 @@ def test_timeline_date_filters_and_pdf_escape_user_text(database):
     assert [event["title"] for event in events] == ["Later"]
     lawyer_workflow.update_summary(case_id, lawyer_workflow.SummaryPatch(executive_summary="A < B & C", current_stage=None), lawyer, db)
     assert lawyer_workflow.export_case(case_id, lawyer_workflow.ExportOptions(), lawyer, db).media_type == "application/pdf"
+
+
+def test_delete_after_analysis_invalidates_dependencies_without_broken_foreign_keys(database):
+    db, lawyer, case_id = analyzed_case(database)
+    lawyer_workflow.analyze(case_id, lawyer, db)
+    document = db.query(CaseDocument).filter(CaseDocument.case_id == case_id).one()
+    assert db.query(CaseTimelineEvent).filter(CaseTimelineEvent.source_document_id == document.id).count() > 0
+    lawyer_documents.delete_document(case_id, document.id, lawyer, db)
+    assert db.query(CaseDocument).filter(CaseDocument.id == document.id).first() is None
+    assert db.query(CaseTimelineEvent).filter(CaseTimelineEvent.source_document_id == document.id).count() == 0
+    analysis = db.query(CaseAnalysis).filter(CaseAnalysis.case_id == case_id).one()
+    assert analysis.status == "needs_review"
+    assert document.original_filename in analysis.error_message

@@ -38,3 +38,12 @@ legal-information retrieval.
    python -m pip install -r ai/requirements.txt
    python -m spacy download en_core_web_sm
    ```
+
+## Lawyer document OCR
+
+The Docker backend installs Tesseract OCR with English and Hindi trained data.
+For host-based backend runs, install Tesseract and the `eng` and `hin` language
+packs, then ensure `tesseract --list-langs` includes both values. Configure
+`TESSERACT_LANGUAGES=eng+hin` and optionally `DOCUMENT_OCR_DPI=300` in `.env`.
+Scanned or mixed PDFs are processed page-by-page; unavailable OCR produces a
+failed document with an actionable error instead of a false parsed result.

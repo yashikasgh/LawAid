@@ -1,68 +1,114 @@
-"""Local document parsing for the Lawyer Case Documents workflow."""
+"""Text extraction for Lawyer case documents with page-level OCR fallbacks."""
 
 import io
+import os
+import subprocess
 
 import fitz
 from docx import Document as WordDocument
 
+OCR_LANGUAGE = os.getenv("TESSERACT_LANGUAGES", "eng+hin")
+OCR_DPI = int(os.getenv("DOCUMENT_OCR_DPI", "300"))
+MIN_USABLE_TEXT = 12
+
+
+class OCRUnavailableError(RuntimeError):
+    pass
+
+
+def _usable_text(text: str) -> bool:
+    return len("".join(text.split())) >= MIN_USABLE_TEXT
+
 
 def _ocr_image_bytes(image_bytes: bytes) -> str:
-    """Return OCR text using the locally installed RapidOCR engine."""
-    from rapidocr_onnxruntime import RapidOCR
+    """Run the Docker-installed Tesseract engine with English and Hindi packs."""
+    try:
+        result = subprocess.run(
+            ["tesseract", "stdin", "stdout", "-l", OCR_LANGUAGE, "--psm", "6"],
+            input=image_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=120,
+        )
+    except FileNotFoundError as error:
+        raise OCRUnavailableError(
+            "OCR is unavailable: Tesseract is not installed. Install tesseract-ocr with English and Hindi language data."
+        ) from error
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("OCR timed out while reading the document page") from error
+    if result.returncode:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise OCRUnavailableError(f"OCR failed: {detail or 'Tesseract could not process the page'}")
+    return result.stdout.decode("utf-8", errors="replace").strip()
 
-    result, _ = RapidOCR()(image_bytes)
-    if not result:
-        return ""
-    return "\n".join(str(line[1]) for line in result if len(line) > 1 and line[1])
+
+def _pdf_page_ocr(page: fitz.Page) -> str:
+    # get_pixmap uses the page's displayed rotation, preserving readable OCR orientation.
+    scale = OCR_DPI / 72
+    image = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).tobytes("png")
+    return _ocr_image_bytes(image)
+
+
+def _extract_pdf(content: bytes) -> tuple[str, int, bool, list[dict]]:
+    try:
+        pdf = fitz.open(stream=content, filetype="pdf")
+    except (fitz.FileDataError, RuntimeError) as error:
+        raise RuntimeError("PDF is corrupt, encrypted, or unreadable") from error
+    with pdf:
+        if pdf.needs_pass:
+            raise RuntimeError("Encrypted PDFs are not supported. Upload an unlocked copy.")
+        pages: list[dict] = []
+        chunks: list[str] = []
+        used_ocr = False
+        for number, page in enumerate(pdf, start=1):
+            native = page.get_text("text").strip()
+            has_images = len(page.get_images()) > 0
+            
+            if _usable_text(native) and (not has_images or len(native) > 1000):
+                chunks.append(native)
+                pages.append({"page": number, "method": "native", "status": "parsed", "characters": len(native)})
+                continue
+                
+            ocr_text = _pdf_page_ocr(page)
+            
+            if _usable_text(ocr_text) and len(ocr_text) > len(native):
+                chunks.append(ocr_text)
+                used_ocr = True
+                pages.append({"page": number, "method": "ocr", "status": "parsed", "characters": len(ocr_text)})
+            elif _usable_text(native):
+                chunks.append(native)
+                pages.append({"page": number, "method": "native", "status": "parsed", "characters": len(native)})
+            else:
+                raise RuntimeError(f"Page {number} has no usable native text and OCR could not read it")
+                
+        return "\n\n".join(chunks), len(pdf), used_ocr, pages
 
 
 def _extract_entities(text: str) -> list[str]:
-    """Entity extraction is deliberately deferred to the separate analysis workflow.
-
-    This upload-and-parsing feature persists only text obtained from the
-    document itself, so it does not infer or fabricate legal entities.
-    """
+    """Entity extraction remains deferred to the lawyer analysis workflow."""
     return []
 
 
 def parse_case_document(content: bytes, file_type: str) -> dict:
-    """Extract real text/pages. OCR is attempted only when local RapidOCR is available."""
+    """Extract text without claiming success when pages cannot actually be read."""
     normalized_type = file_type.lower()
-    text = ""
-    page_count: int | None = None
-    ocr_used = False
-
     if normalized_type == "pdf":
-        with fitz.open(stream=content, filetype="pdf") as pdf:
-            page_count = len(pdf)
-            text = "\n".join(page.get_text("text") for page in pdf)
-            if not text.strip():
-                try:
-                    ocr_used = True
-                    text = "\n".join(
-                        _ocr_image_bytes(page.get_pixmap(matrix=fitz.Matrix(2, 2)).tobytes("png"))
-                        for page in pdf
-                    )
-                except Exception as error:
-                    raise RuntimeError("No extractable PDF text and local OCR is unavailable") from error
+        text, page_count, ocr_used, extraction_details = _extract_pdf(content)
     elif normalized_type == "docx":
         document = WordDocument(io.BytesIO(content))
-        text = "\n".join(paragraph.text for paragraph in document.paragraphs)
-        # DOCX files do not carry a dependable rendered page count.
-        page_count = None
+        text = "\n".join(paragraph.text for paragraph in document.paragraphs).strip()
+        if not text:
+            raise RuntimeError("DOCX contains no extractable paragraph text")
+        page_count, ocr_used = None, False
+        extraction_details = [{"page": None, "method": "native", "status": "parsed", "characters": len(text)}]
     elif normalized_type in {"jpg", "jpeg", "png"}:
-        page_count = 1
-        try:
-            ocr_used = True
-            text = _ocr_image_bytes(content)
-        except Exception as error:
-            raise RuntimeError("Local OCR is unavailable for image documents") from error
+        text = _ocr_image_bytes(content)
+        if not _usable_text(text):
+            raise RuntimeError("OCR could not read usable text from the image")
+        page_count, ocr_used = 1, True
+        extraction_details = [{"page": 1, "method": "ocr", "status": "parsed", "characters": len(text)}]
     else:
         raise ValueError("Unsupported document type")
-
-    return {
-        "text": text,
-        "page_count": page_count,
-        "ocr_used": ocr_used,
-        "entities": _extract_entities(text),
-    }
+    return {"text": text, "page_count": page_count, "ocr_used": ocr_used,
+            "extraction_details": extraction_details, "entities": _extract_entities(text)}

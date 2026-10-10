@@ -16,6 +16,7 @@ from app.core.deps import require_role
 from app.core.mongo import fs, mongo_available
 from app.models.case_document import CaseDocument
 from app.models.lawyer_case import LawyerCase
+from app.models.lawyer_workflow import CaseAnalysis, CaseTimelineEvent
 from app.models.user import User
 from app.services.case_document_parser import parse_case_document
 
@@ -51,7 +52,15 @@ def _serialize(document: CaseDocument) -> dict:
         "extracted_entities": entities,
         "error": document.error_message,
         "ocr_used": document.ocr_used,
+        "extraction_details": _json_value(document.extraction_details, []),
     }
+
+
+def _json_value(value: str | None, fallback):
+    try:
+        return json.loads(value or "")
+    except (TypeError, json.JSONDecodeError):
+        return fallback
 
 
 def _case_for_lawyer(case_id: str, user: User, db: Session) -> LawyerCase:
@@ -92,6 +101,55 @@ def _validated_file_type(upload: UploadFile, data: bytes) -> tuple[str, str, str
 def _storage_required() -> None:
     if not mongo_available or fs is None:
         raise HTTPException(status_code=503, detail="Private document storage is unavailable. Start MongoDB and retry.")
+
+
+def _invalidate_document_dependencies(document: CaseDocument, db: Session) -> None:
+    """Detach deleted-document references and require a lawyer reanalysis.
+
+    Generated events are removed because their contents can be recreated from
+    remaining files. Lawyer-edited events are retained, but lose their broken
+    document foreign key and are marked for review.
+    """
+    for event in db.query(CaseTimelineEvent).filter(CaseTimelineEvent.source_document_id == document.id).all():
+        if event.is_edited != "true":
+            db.delete(event)
+            continue
+        event.source_document_id = None
+        event.confidence = "needs_review"
+        event.source_reference = json.dumps({"document_deleted": True, "document_name": document.original_filename})
+
+    analysis = db.query(CaseAnalysis).filter(CaseAnalysis.case_id == document.case_id).first()
+    if not analysis:
+        db.flush()
+        return
+    payload = _json_value(analysis.payload, {})
+
+    def redact_reference(value):
+        if isinstance(value, list):
+            return [redact_reference(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        result = {key: redact_reference(item) for key, item in value.items()}
+        source = result.get("source")
+        if isinstance(source, dict) and source.get("document_id") == document.id:
+            result["source"] = {"document_deleted": True, "document_name": document.original_filename}
+            result["confidence"] = "needs_review"
+        if result.get("source_document_id") == document.id:
+            result["source_document_id"] = None
+            result["source_document_name"] = document.original_filename
+            result["source_document_deleted"] = True
+            result["confidence"] = "needs_review"
+        return result
+
+    payload = redact_reference(payload)
+    limitations = payload.setdefault("limitations", []) if isinstance(payload, dict) else []
+    notice = f"{document.original_filename} was deleted. Review affected extracted facts and rerun analysis."
+    if isinstance(limitations, list) and notice not in limitations:
+        limitations.append(notice)
+    analysis.payload = json.dumps(payload)
+    analysis.status = "needs_review"
+    analysis.error_message = notice
+    db.flush()
 
 
 @router.post("/cases/workspace")
@@ -201,16 +259,17 @@ async def upload_documents(
             document.page_count = parsed["page_count"]
             document.ocr_used = parsed["ocr_used"]
             document.extracted_entities = json.dumps(parsed["entities"])
+            document.extraction_details = json.dumps(parsed["extraction_details"])
             document.status = "parsed"
             document.progress = 100
             document.error_message = None
         except HTTPException:
             db.rollback()
             raise
-        except Exception:
+        except Exception as error:
             document.status = "failed"
             document.progress = 100
-            document.error_message = "The document could not be parsed. You can retry the upload."
+            document.error_message = f"Parsing failed: {str(error)[:420] or 'unknown parser error'}"
         db.add(document)
         db.commit()
         db.refresh(document)
@@ -233,13 +292,19 @@ def delete_document(
     )
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    if document.storage_ref and mongo_available and fs is not None:
+    _invalidate_document_dependencies(document, db)
+    if document.storage_ref:
+        _storage_required()
         try:
             fs.delete(ObjectId(document.storage_ref))
         except Exception:
             raise HTTPException(status_code=503, detail="Document storage is unavailable. Retry deletion later.")
-    db.delete(document)
-    db.commit()
+    try:
+        db.delete(document)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Database deletion failed due to dependencies. Review analysis or timeline events first.")
     return {"status": "deleted", "document_id": document_id}
 
 
@@ -268,12 +333,13 @@ def retry_document_parse(
         document.page_count = parsed["page_count"]
         document.ocr_used = parsed["ocr_used"]
         document.extracted_entities = json.dumps(parsed["entities"])
+        document.extraction_details = json.dumps(parsed["extraction_details"])
         document.status = "parsed"
         document.progress = 100
-    except Exception:
+    except Exception as error:
         document.status = "failed"
         document.progress = 100
-        document.error_message = "The document could not be parsed. You can retry the upload."
+        document.error_message = f"Parsing failed: {str(error)[:420] or 'unknown parser error'}"
     db.add(document)
     db.commit()
     db.refresh(document)

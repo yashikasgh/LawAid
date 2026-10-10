@@ -73,5 +73,29 @@ def extract_case_information(documents):
             if len(line) >= 30 and re.search(r"incident|accused|complainant|witness|stolen|assault|fraud", line, re.I):
                 if line.lower() not in seen["fact"]:
                     seen["fact"].add(line.lower()); facts.append({"text": line[:1000], "source": {"document_id": document.id, "document_name": document.original_filename, "excerpt": line[:1000]}, "confidence": "needs_review"})
+    combined_text = "\n".join(d.extracted_text or "" for d in documents).strip()
+    if combined_text:
+        try:
+            import sys
+            from pathlib import Path
+            project_root = str(Path(__file__).resolve().parents[3])
+            if project_root not in sys.path:
+                sys.path.insert(0, project_root)
+            from ai.rag.pipeline import run_pipeline
+            
+            rag_res = run_pipeline(combined_text[:3000], skip_llm_analysis=True)
+            for item in rag_res.get("analysis", []):
+                sec_num = item.get("section")
+                if sec_num and sec_num not in seen["section"]:
+                    seen["section"].add(sec_num)
+                    sections.append({
+                        "section_number": sec_num,
+                        "title": item.get("title", ""),
+                        "confidence": "suggested_by_pipeline",
+                        "source": {"document_id": None, "document_name": "AI Legal Pipeline", "excerpt": item.get("offence_type", "")}
+                    })
+        except Exception:
+            pass
+
     return {"parties": parties, "locations": locations, "bns_sections": sections, "evidence": evidence, "financial_details": financial, "key_facts": facts, "timeline_candidates": timeline, "offence_type": None,
             "limitations": ["All extracted values require lawyer review. Fields not supported by uploaded text are left blank."]}
