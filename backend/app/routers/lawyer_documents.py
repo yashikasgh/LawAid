@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Annotated
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_db, SessionLocal
 from app.core.deps import require_role
 from app.core.mongo import fs, mongo_available
 from app.models.case_document import CaseDocument
@@ -208,10 +208,38 @@ def document_metrics(
     }
 
 
+def _process_document_background(document_id: str, data: bytes, file_type: str) -> None:
+    db = SessionLocal()
+    try:
+        document = db.query(CaseDocument).filter(CaseDocument.id == document_id).first()
+        if not document:
+            return
+            
+        try:
+            parsed = parse_case_document(data, file_type)
+            document.extracted_text = parsed["text"]
+            document.page_count = parsed["page_count"]
+            document.ocr_used = parsed["ocr_used"]
+            document.extracted_entities = json.dumps(parsed["entities"])
+            document.extraction_details = json.dumps(parsed["extraction_details"])
+            document.status = "parsed"
+            document.progress = 100
+            document.error_message = None
+        except Exception as error:
+            document.status = "failed"
+            document.progress = 100
+            document.error_message = f"Parsing failed: {str(error)[:420] or 'unknown parser error'}"
+            
+        db.commit()
+    finally:
+        db.close()
+
+
 @router.post("/cases/{case_id}/documents", status_code=status.HTTP_201_CREATED)
 async def upload_documents(
     case_id: str,
     files: Annotated[list[UploadFile], File(...)],
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_role("lawyer")),
     db: Session = Depends(get_db),
 ):
@@ -254,24 +282,20 @@ async def upload_documents(
             document.progress = 65
             db.commit()
 
-            parsed = parse_case_document(data, file_type)
-            document.extracted_text = parsed["text"]
-            document.page_count = parsed["page_count"]
-            document.ocr_used = parsed["ocr_used"]
-            document.extracted_entities = json.dumps(parsed["entities"])
-            document.extraction_details = json.dumps(parsed["extraction_details"])
-            document.status = "parsed"
-            document.progress = 100
-            document.error_message = None
+            # Delegate parsing to background task so the HTTP request returns quickly
+            background_tasks.add_task(_process_document_background, document.id, data, file_type)
+
         except HTTPException:
             db.rollback()
             raise
         except Exception as error:
+            db.rollback()
             document.status = "failed"
             document.progress = 100
-            document.error_message = f"Parsing failed: {str(error)[:420] or 'unknown parser error'}"
-        db.add(document)
-        db.commit()
+            document.error_message = f"Upload failed: {str(error)[:420] or 'unknown storage error'}"
+            db.add(document)
+            db.commit()
+            
         db.refresh(document)
         created.append(document)
     return [_serialize(document) for document in created]
@@ -312,6 +336,7 @@ def delete_document(
 def retry_document_parse(
     case_id: str,
     document_id: str,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_role("lawyer")),
     db: Session = Depends(get_db),
 ):
@@ -328,20 +353,16 @@ def retry_document_parse(
         document.progress = 65
         document.error_message = None
         db.commit()
-        parsed = parse_case_document(data, document.file_type)
-        document.extracted_text = parsed["text"]
-        document.page_count = parsed["page_count"]
-        document.ocr_used = parsed["ocr_used"]
-        document.extracted_entities = json.dumps(parsed["entities"])
-        document.extraction_details = json.dumps(parsed["extraction_details"])
-        document.status = "parsed"
-        document.progress = 100
+        
+        # Delegate to background task
+        background_tasks.add_task(_process_document_background, document.id, data, document.file_type)
+        
     except Exception as error:
         document.status = "failed"
         document.progress = 100
-        document.error_message = f"Parsing failed: {str(error)[:420] or 'unknown parser error'}"
-    db.add(document)
-    db.commit()
+        document.error_message = f"Failed to retrieve for retry: {str(error)[:420] or 'unknown error'}"
+        db.commit()
+    
     db.refresh(document)
     return _serialize(document)
 

@@ -46,6 +46,57 @@ def extract_case_information(documents):
         text = document.extracted_text or ""
         if not text.strip():
             continue
+            
+        # -- RULE BASED FIR EXTRACTION --
+        is_fir = "FIRST INFORMATION REPORT" in text.upper() or "प्रथम सूचना रिपोर्ट" in text
+        if is_fir:
+            # Complainant
+            m_comp = re.search(r'\(a\)\s?Name\(.*?\):\s*([^\n]+)', text, re.I)
+            if m_comp:
+                val = m_comp.group(1).strip()
+                if val.lower() not in seen["complainant"]:
+                    seen["complainant"].add(val.lower())
+                    parties.append({"role": "complainant", "name": val, "source": _source(document, m_comp), "confidence": "explicit_in_document"})
+            
+            # Location
+            m_loc = re.search(r'\(b\)\s?Address\(.*?\):\s*([^\n]+)', text, re.I)
+            if m_loc:
+                val = m_loc.group(1).strip()
+                if val.lower() not in seen["location"]:
+                    seen["location"].add(val.lower())
+                    locations.append({"text": val, "source": _source(document, m_loc), "confidence": "explicit_in_document"})
+            
+            # Incident Date and Time
+            m_date = re.search(r'Date From\(.*?\):\s*([0-9/]+)', text, re.I)
+            m_time = re.search(r'Time From\s*\(.*?\):\s*(.+?hrs)', text, re.I)
+            if m_date:
+                date_val = _normalized_date(m_date.group(1).strip())
+                time_val = m_time.group(1).strip() if m_time else None
+                timeline.append({
+                    "date": date_val, 
+                    "time": time_val, 
+                    "title": "Incident Occurred (FIR)", 
+                    "description": "Date and time of the incident as officially recorded in the FIR.", 
+                    "event_type": "Incident", 
+                    "source_document_id": document.id, 
+                    "source_document_name": document.original_filename, 
+                    "source_reference": _source(document, m_date), 
+                    "confidence": "explicit_in_document"
+                })
+
+            # FIR Content / Key Facts
+            m_content = re.search(r'12\.F\.I\.R\.\s*Contents.*?\n(.*?)(?=\n13\.Action Taken|\Z)', text, re.DOTALL | re.I)
+            if m_content:
+                content_val = m_content.group(1).strip()
+                if content_val and content_val.lower() not in seen["fact"]:
+                    seen["fact"].add(content_val.lower())
+                    facts.append({
+                        "text": content_val[:1500] + ("..." if len(content_val) > 1500 else ""), 
+                        "source": {"document_id": document.id, "document_name": document.original_filename, "excerpt": content_val[:1000]}, 
+                        "confidence": "explicit_in_document"
+                    })
+        # -- END RULE BASED FIR EXTRACTION --
+
         for role, labels in (("complainant", ["complainant", "informant"]), ("accused", ["accused", "respondent", "suspect"])):
             value, match = _labelled(text, labels)
             if value and value.lower() not in seen[role]:
