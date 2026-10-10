@@ -695,7 +695,8 @@ class MultiProviderLLMFailoverClient(LLMClient):
         # 2. Gemini
         if gemini_key:
             try:
-                chain.append(GeminiLLMClient(api_key=gemini_key, model_name="gemini-3.8-flash"))
+                gemini_model = os.environ.get("GEMINI_MODEL") or "gemini-3.8-flash"
+                chain.append(GeminiLLMClient(api_key=gemini_key, model_name=gemini_model))
             except Exception as e:
                 print(f"[LLM Failover Config Warning] Gemini init skipped: {e}")
 
@@ -709,7 +710,8 @@ class MultiProviderLLMFailoverClient(LLMClient):
         # 4. OpenRouter Default Router
         if openrouter_key:
             try:
-                chain.append(OpenRouterLLMClient(api_key=openrouter_key))
+                openrouter_model = os.environ.get("OPENROUTER_MODEL") or "openrouter/free"
+                chain.append(OpenRouterLLMClient(api_key=openrouter_key, model_name=openrouter_model))
             except Exception as e:
                 print(f"[LLM Failover Config Warning] OpenRouter default init skipped: {e}")
 

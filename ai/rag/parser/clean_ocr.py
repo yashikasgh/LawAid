@@ -95,23 +95,25 @@ def extract_fir_metadata(cleaned_text: str) -> Dict[str, str]:
         return "Not stated in the FIR"
 
     fir_number = _extract_regex([
+        r'(?:FIR|RC|R\.C\.|Crime\s+No|Case\s+No|Ref|Reference)\s*(?:No\.?|Number|Ref\.?)?\s*[:\-]?\s*([A-Za-z0-9/\-\.]{3,35})',
         r'FIR\s*(?:No\.?|Number)\s*[:\-]?\s*([0-9]+/[0-9]{2,4}(?=[A-Za-z\s]|$)|[A-Za-z0-9/\-]+?\b)',
         r'FIR\s*[:\-]\s*([0-9]+/[0-9]{2,4}(?=[A-Za-z\s]|$)|[A-Za-z0-9/\-]+?\b)',
     ])
 
     police_station = _extract_regex([
-        r'Police\s*Station\s*(?:\'s\s*Name|\'s\s*Details|Name|Details)?\s*[:\-]?\s*([A-Za-z0-9\s,]+?)(?=\n|District|FIR|Date|Time|$)',
-        r'P\.S\.?\s*[:\-]?\s*([A-Za-z0-9\s,]+?)(?=\n|District|FIR|Date|Time|$)',
+        r'Police\s*Station\s*(?:\'s\s*Name|\'s\s*Details|Name|Details)?\s*[:\-]?\s*([A-Za-z0-9\s,\-\.\(\)]+?)(?=\n|District|FIR|RC|Date|Time|$)',
+        r'P\.S\.?\s*[:\-]?\s*([A-Za-z0-9\s,\-\.\(\)]+?)(?=\n|District|FIR|RC|Date|Time|$)',
+        r'\b([A-Za-z0-9\s,]+?\s+Police\s+Station[A-Za-z0-9\s,]*)\b',
     ])
 
     district = _extract_regex([
-        r'District\s*[:\-]?\s*([A-Za-z0-9\s]+?)(?=\n|State|P\.S|FIR|Date|$)',
-        r'Dist\.?\s*[:\-]?\s*([A-Za-z0-9\s]+?)(?=\n|State|P\.S|FIR|Date|$)',
+        r'District\s*[:\-]?\s*([A-Za-z0-9\s,\-\.]+?)(?=\n|State|P\.S|FIR|RC|Date|$)',
+        r'Dist\.?\s*[:\-]?\s*([A-Za-z0-9\s,\-\.]+?)(?=\n|State|P\.S|FIR|RC|Date|$)',
     ])
 
     date_of_report = _extract_regex([
-        r'(?:Date\s*of\s*FIR|Date\s*of\s*Report|FIR\s*Date)\s*[:\-]?\s*([0-9]{1,2}[/\-\.][0-9]{1,2}[/\-\.][0-9]{2,4})',
-        r'Dated?\s*[:\-]?\s*([0-9]{1,2}[/\-\.][0-9]{1,2}[/\-\.][0-9]{2,4})',
+        r'(?:Date\s*of\s*FIR|Date\s*of\s*Report|FIR\s*Date|Dated?)\s*[:\-]?\s*([0-9]{1,2}[/\-\.][0-9]{1,2}[/\-\.][0-9]{2,4})',
+        r'Date\s*[:\-]?\s*([0-9]{1,2}[/\-\.][0-9]{1,2}[/\-\.][0-9]{2,4})',
         r'\b([0-9]{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+[0-9]{2,4})\b',
     ])
 
@@ -121,12 +123,12 @@ def extract_fir_metadata(cleaned_text: str) -> Dict[str, str]:
     ])
 
     informant = _extract_regex([
-        r'(?:Informant|Complainant)\s*(?:\'s\s*Details|\'s\s*Name|Details|Name)?\s*[:\-]?\s*([^\n]+?)(?=\n|Place|Police|District|FIR|Date|Time|$)',
+        r'(?:Informant|Complainant)\s*(?:\'s\s*Details|\'s\s*Name|Details|Name)?\s*[:\-]?\s*([^\n]+?)(?=\n|Place|Police|District|FIR|RC|Date|Time|$)',
     ])
 
     accused_details = _extract_regex([
-        r'Accused\s*(?:Details|Person)?\s*[:\-]?\s*([^\n]+?)(?=\n|Place|Police|District|FIR|Date|Time|$)',
-        r'Suspect\s*[:\-]?\s*([^\n]+?)(?=\n|Place|Police|District|FIR|Date|Time|$)',
+        r'Accused\s*(?:Details|Person)?\s*[:\-]?\s*([^\n]+?)(?=\n|Place|Police|District|FIR|RC|Date|Time|$)',
+        r'Suspect\s*[:\-]?\s*([^\n]+?)(?=\n|Place|Police|District|FIR|RC|Date|Time|$)',
     ])
 
     place_of_occurrence = _extract_regex([
@@ -154,6 +156,46 @@ def extract_fir_metadata(cleaned_text: str) -> Dict[str, str]:
         "injuries_damage": injuries_damage,
         "witnesses": witnesses
     }
+
+
+def extract_explicit_fir_provisions(text: str) -> list:
+    """
+    Extracts explicit recorded provisions along with their specific statute names
+    from FIR Item 2 (Acts & Sections).
+    Returns a list of dicts: [{'section': '16', 'act': 'Unlawful Activities (Prevention) Act, 1967'}, ...]
+    """
+    if not text:
+        return []
+
+    results = []
+    seen = set()
+
+    for line in text.splitlines():
+        line_s = line.strip()
+        if "section" in line_s.lower():
+            m = re.search(r'Act\s*[:\-]?\s*(.+?)\s+Sections?\s*[:\-]?\s*([0-9\(\)a-zA-Z\s/,]+)', line_s, re.IGNORECASE)
+            if m:
+                act_clean = m.group(1).strip().rstrip('.,;:')
+                if act_clean.lower() in ["item 2", "acts &", "acts and", "2.", "acts"]:
+                    continue
+                sec_raw = m.group(2)
+                sec_tokens = re.split(r'[/,;\s]+', sec_raw)
+                for tok in sec_tokens:
+                    tok = tok.strip().rstrip('.,;:/-')
+                    if tok:
+                        m_sec = re.match(r'^(\d{1,4}(?:\([a-zA-Z0-9]+\))*[a-zA-Z]?)$', tok)
+                        if m_sec:
+                            sec_val = m_sec.group(1)
+                            if (sec_val, act_clean) not in seen:
+                                seen.add((sec_val, act_clean))
+                                results.append({"section": sec_val, "act": act_clean})
+
+    if not results:
+        bns_sections = extract_explicit_fir_sections(text)
+        for s in bns_sections:
+            results.append({"section": s, "act": "Bharatiya Nyaya Sanhita, 2023"})
+
+    return results
 
 
 def extract_explicit_fir_sections(text: str) -> list:

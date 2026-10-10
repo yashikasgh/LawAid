@@ -44,6 +44,7 @@ type UnderstandResponse = {
   next_steps: string[]
   disclaimer?: string
   fir_metadata?: Record<string, string>
+  ocr_metadata?: Record<string, string>
 }
 
 type SavedFIRRecord = {
@@ -573,18 +574,19 @@ export default function UnderstandPage() {
   }
 
   // Metadata items for Top Overview
-  const firNo = result ? getMetadataVal(result.fir_metadata, ['fir_number', 'fir_no', 'fir_num', 'fir', 'number']) : null
-  const firDate = result ? getMetadataVal(result.fir_metadata, ['fir_date', 'date_of_fir', 'date', 'date_reported']) : null
-  const policeStation = result ? getMetadataVal(result.fir_metadata, ['police_station', 'ps', 'station']) : null
-  const district = result ? getMetadataVal(result.fir_metadata, ['district', 'dist']) : null
-  const year = result ? getMetadataVal(result.fir_metadata, ['year']) || (firDate ? firDate.match(/\b(20\d\d|19\d\d)\b/)?.[0] || null : null) : null
+  const firMeta = result ? (result.fir_metadata || result.ocr_metadata) : undefined
+  const firNo = result ? getMetadataVal(firMeta, ['fir_number', 'fir_no', 'fir_num', 'fir', 'number', 'rc_number']) : null
+  const firDate = result ? getMetadataVal(firMeta, ['date_of_report', 'fir_date', 'date_of_fir', 'date', 'date_reported']) : null
+  const policeStation = result ? getMetadataVal(firMeta, ['police_station', 'ps', 'station']) : null
+  const district = result ? getMetadataVal(firMeta, ['district', 'dist']) : null
+  const year = result ? getMetadataVal(firMeta, ['year']) || (firDate ? firDate.match(/\b(20\d\d|19\d\d)\b/)?.[0] || null : null) : null
 
   // Fact drawer item values
-  const complainant = result ? getMetadataVal(result.fir_metadata, ['complainant', 'informant']) : null
-  const accused = result ? getMetadataVal(result.fir_metadata, ['accused', 'suspect']) : null
-  const victim = result ? getMetadataVal(result.fir_metadata, ['victim']) : null
-  const occurrenceDate = result ? getMetadataVal(result.fir_metadata, ['date_of_occurrence', 'occurrence_date', 'incident_date']) : null
-  const occurrencePlace = result ? getMetadataVal(result.fir_metadata, ['place_of_occurrence', 'place', 'location']) : null
+  const complainant = result ? getMetadataVal(firMeta, ['complainant', 'informant']) : null
+  const accused = result ? getMetadataVal(firMeta, ['accused', 'suspect']) : null
+  const victim = result ? getMetadataVal(firMeta, ['victim']) : null
+  const occurrenceDate = result ? getMetadataVal(firMeta, ['date_of_occurrence', 'occurrence_date', 'date_time_of_occurrence', 'incident_date']) : null
+  const occurrencePlace = result ? getMetadataVal(firMeta, ['place_of_occurrence', 'place', 'location']) : null
 
   const hasPeopleData = Boolean(complainant || accused || victim)
   const hasDatesData = Boolean(firDate || occurrenceDate || policeStation || district || year)
@@ -934,9 +936,9 @@ export default function UnderstandPage() {
                       </div>
                     </div>
 
-                    {/* Explicit BNS Section Chips */}
+                    {/* Explicit Section Chips */}
                     <div className="pt-2 flex flex-wrap items-center gap-2">
-                      <span className="text-xs font-bold text-[#12335B] mr-1">BNS Sections Recorded:</span>
+                      <span className="text-xs font-bold text-[#12335B] mr-1">Sections Recorded in FIR:</span>
                       {getExplicitSectionChips(result).length > 0 ? (
                         getExplicitSectionChips(result).map((sec, idx) => (
                           <span
@@ -998,7 +1000,7 @@ export default function UnderstandPage() {
                         Sections recorded in this FIR
                       </h2>
                       <p className="text-xs text-gray-500 mt-0.5">
-                        These are the provisions explicitly recorded in the FIR.
+                        These are the statutory provisions explicitly recorded in the FIR.
                       </p>
                     </div>
 
@@ -1017,6 +1019,26 @@ export default function UnderstandPage() {
                             renderFieldContent(c.law_requires) ||
                             c.title
 
+                          const actName = (c as any).act || (c as any).act_name || ''
+                          const actNameLower = actName.toLowerCase()
+                          const statuteTag = actNameLower.includes('unlawful activities') || actNameLower.includes('uapa')
+                            ? 'UAPA'
+                            : actNameLower.includes('explosive')
+                            ? 'Explosive Act'
+                            : actNameLower.includes('nagarik') || actNameLower.includes('bnss')
+                            ? 'BNSS'
+                            : actNameLower.includes('penal') || actNameLower.includes('ipc')
+                            ? 'IPC'
+                            : actNameLower.includes('arms')
+                            ? 'Arms Act'
+                            : actNameLower.includes('bns') || actNameLower.includes('nyaya')
+                            ? 'BNS'
+                            : actName ? actName : 'BNS'
+
+                          const secBadgeText = c.section.toLowerCase().includes('section') || c.section.toLowerCase().includes('sec')
+                            ? c.section
+                            : `§${c.section} ${statuteTag}`
+
                           return (
                             <div
                               key={secKey}
@@ -1027,7 +1049,7 @@ export default function UnderstandPage() {
                                 <div className="space-y-1 min-w-0">
                                   <div className="flex items-center gap-2">
                                     <span className="font-mono font-bold text-[#12335B] text-sm bg-[#f0ebd9] px-2 py-0.5 rounded border border-[#d2a14b]/30">
-                                      §{c.section} BNS
+                                      {secBadgeText}
                                     </span>
                                     <h3 className="font-semibold text-gray-900 text-sm truncate">
                                       {c.title}

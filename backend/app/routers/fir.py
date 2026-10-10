@@ -319,11 +319,12 @@ async def understand_fir(file: UploadFile = File(...)):
     file_stored = False
 
     # 2. Text extraction, OCR cleaning, and metadata extraction
-    from ai.rag.parser.clean_ocr import clean_ocr_text, extract_fir_metadata
+    from ai.rag.parser.clean_ocr import clean_ocr_text, extract_fir_metadata, extract_explicit_fir_provisions
     extracted_text = _extract_text_with_ocr(contents, file.filename, file.content_type)
     cleaned_text = clean_ocr_text(extracted_text)
     ocr_meta = extract_fir_metadata(cleaned_text)
-    detected_sections = detect_bns_sections(cleaned_text) if cleaned_text else []
+    explicit_provisions = extract_explicit_fir_provisions(cleaned_text) if cleaned_text else []
+    detected_sections = [p["section"] for p in explicit_provisions] if explicit_provisions else []
 
     if not cleaned_text or len(cleaned_text.strip()) < 15:
         raise HTTPException(
@@ -355,9 +356,12 @@ async def understand_fir(file: UploadFile = File(...)):
     charges_uncertain = []
     full_analysis = []
 
+    act_by_section = {p["section"]: p["act"] for p in explicit_provisions}
+
     for item in ai_res.get("analysis", []):
         app_status = item.get("applicability", "supported" if item.get("status") == "Supported" else "uncertain")
         sec_str = str(item.get("section", ""))
+        act_str = item.get("act") or item.get("act_name") or act_by_section.get(sec_str) or "Bharatiya Nyaya Sanhita, 2023"
         law_req = item.get("law_requires") or item.get("core_elements") or [item.get("title", "Statutory requirement")]
         fir_st = item.get("fir_states") or item.get("satisfied_elements") or ["Facts stated in the FIR."]
         why_apply = item.get("why_may_apply") or item.get("reasoning") or f"The allegations in the FIR correspond to the statutory scope of Section {sec_str}."
@@ -366,6 +370,7 @@ async def understand_fir(file: UploadFile = File(...)):
 
         entry = {
             "section": sec_str,
+            "act": act_str,
             "clause": item.get("clause", ""),
             "title": item.get("title", ""),
             "punishment": item.get("punishment", ""),
@@ -502,9 +507,15 @@ async def understand_fir(file: UploadFile = File(...)):
         )
 
     # Dynamic case-relevant fallbacks for unestablished facts and clarifying details
+    import re
     offence_titles_lower = " ".join([c.get("title", "").lower() for c in display_charges])
+    is_rash_driving_case = any(
+        ("rash" in c.get("title", "").lower() or "negligent driving" in c.get("title", "").lower())
+        and c.get("applicability") == "supported"
+        for c in display_charges
+    ) or bool(re.search(r'\b(?:rash|negligent)\s+driving\b|\bmotor\s+vehicle\s+accident\b', cleaned_text, re.IGNORECASE))
     
-    if "driving" in offence_titles_lower or "riding" in offence_titles_lower or "road" in cleaned_text.lower() or "accident" in cleaned_text.lower():
+    if is_rash_driving_case:
         default_unestablished = [
             "Whether the vehicle was operated in a rash or negligent manner at excessive speed.",
             "Whether mechanical failure or road conditions contributed to the incident.",
@@ -562,8 +573,27 @@ async def understand_fir(file: UploadFile = File(...)):
     ]
 
     if has_sections_in_fir:
+        formatted_provs = []
+        for p in explicit_provisions:
+            sec = p.get("section", "")
+            act = p.get("act", "")
+            act_lower = act.lower()
+            if "unlawful activities" in act_lower or "uapa" in act_lower:
+                formatted_provs.append(f"UAPA Section {sec}")
+            elif "explosive" in act_lower:
+                formatted_provs.append(f"Explosive Substances Act Section {sec}")
+            elif "nagarik suraksha" in act_lower or "bnss" in act_lower:
+                formatted_provs.append(f"BNSS Section {sec}")
+            elif "indian penal code" in act_lower or "ipc" in act_lower:
+                formatted_provs.append(f"IPC Section {sec}")
+            elif "bns" in act_lower or "nyaya" in act_lower:
+                formatted_provs.append(f"BNS Section {sec}")
+            else:
+                formatted_provs.append(f"{act} Section {sec}" if act else f"Section {sec}")
+
+        prov_label_str = ", ".join(formatted_provs) if formatted_provs else f"Section {', '.join(sections_recorded_in_fir)}"
         bottom_line_val = ai_res.get("bottom_line") or (
-            f"This FIR explicitly states allegations under Section {', '.join(sections_recorded_in_fir)}. "
+            f"This FIR explicitly states allegations under {prov_label_str}. "
             "These provisions are relevant for legal consideration; the FIR itself does not establish guilt."
         )
     else:
@@ -586,6 +616,7 @@ async def understand_fir(file: UploadFile = File(...)):
         "file_stored": file_stored,
         "filename": file.filename,
         "extracted_text": cleaned_text[:1200],
+        "fir_metadata": ocr_meta,
         "ocr_metadata": ocr_meta,
         "sections_recorded_in_fir": sections_recorded_in_fir,
         "has_sections_in_fir": has_sections_in_fir,
