@@ -324,6 +324,12 @@ async def understand_fir(file: UploadFile = File(...)):
     cleaned_text = clean_ocr_text(extracted_text)
     ocr_meta = extract_fir_metadata(cleaned_text)
     explicit_provisions = extract_explicit_fir_provisions(cleaned_text) if cleaned_text else []
+
+    # Filter target sections for BNS retrieval: ONLY pass BNS section numbers to BNS vector search
+    bns_target_sections = [
+        p["section"] for p in explicit_provisions
+        if "bns" in p["act"].lower() or "nyaya" in p["act"].lower() or p["act"] == "Bharatiya Nyaya Sanhita, 2023"
+    ]
     detected_sections = [p["section"] for p in explicit_provisions] if explicit_provisions else []
 
     if not cleaned_text or len(cleaned_text.strip()) < 15:
@@ -336,83 +342,28 @@ async def understand_fir(file: UploadFile = File(...)):
     if not _PIPELINE_AVAILABLE:
         raise HTTPException(status_code=500, detail="AI Pipeline module not found or unavailable.")
 
-    has_sections_in_fir = bool(detected_sections)
-    sections_recorded_in_fir = detected_sections if has_sections_in_fir else []
+    has_sections_in_fir = bool(explicit_provisions)
+    sections_recorded_in_fir = [f"{p['section']} ({p['act']})" for p in explicit_provisions]
 
     try:
-        if has_sections_in_fir:
+        if bns_target_sections:
             ai_res = _run_pipeline(
                 raw_incident=cleaned_text,
-                target_sections=sections_recorded_in_fir
+                target_sections=bns_target_sections
             )
         else:
             ai_res = _run_pipeline(
                 raw_incident=cleaned_text
             )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI Legal Analysis failed: {str(e)}")
-
-    charges_supported = []
-    charges_uncertain = []
-    full_analysis = []
-
-    act_by_section = {p["section"]: p["act"] for p in explicit_provisions}
-
-    for item in ai_res.get("analysis", []):
-        app_status = item.get("applicability", "supported" if item.get("status") == "Supported" else "uncertain")
-        sec_str = str(item.get("section", ""))
-        act_str = item.get("act") or item.get("act_name") or act_by_section.get(sec_str) or "Bharatiya Nyaya Sanhita, 2023"
-        law_req = item.get("law_requires") or item.get("core_elements") or [item.get("title", "Statutory requirement")]
-        fir_st = item.get("fir_states") or item.get("satisfied_elements") or ["Facts stated in the FIR."]
-        why_apply = item.get("why_may_apply") or item.get("reasoning") or f"The allegations in the FIR correspond to the statutory scope of Section {sec_str}."
-        what_uncert = item.get("what_remains_uncertain") or item.get("missing_elements") or ["Further investigation and legal proceedings required."]
-        assess = item.get("assessment") or f"The allegations recorded in the FIR make Section {sec_str} relevant for consideration; the FIR itself does not establish guilt."
-
-        entry = {
-            "section": sec_str,
-            "act": act_str,
-            "clause": item.get("clause", ""),
-            "title": item.get("title", ""),
-            "punishment": item.get("punishment", ""),
-            "bailable": item.get("bailable", ""),
-            "cognizable": item.get("cognizable", ""),
-            "court": item.get("court", ""),
-            "reasoning": item.get("reasoning", ""),
-            "applicability": app_status,
-            "status": item.get("status", ""),
-            "law_requires": law_req,
-            "fir_states": fir_st,
-            "why_may_apply": why_apply,
-            "what_remains_uncertain": what_uncert,
-            "assessment": assess,
+        ai_res = {
+            "status": "analysis_unavailable",
+            "source": "retrieval_fallback",
+            "pipeline_source": "retrieval_fallback",
+            "analysis": []
         }
-        full_analysis.append(entry)
 
-        if app_status == "supported":
-            charges_supported.append(entry)
-        elif app_status == "uncertain":
-            charges_uncertain.append(entry)
-
-    def _dedupe_charges(charge_list):
-        seen = set()
-        deduped = []
-        for c in charge_list:
-            sec = c.get("section", "").strip()
-            if sec and sec not in seen:
-                seen.add(sec)
-                deduped.append(c)
-        return deduped
-
-    display_charges = _dedupe_charges(charges_supported or full_analysis)
-
-    if has_sections_in_fir:
-        explained_sections = display_charges or _dedupe_charges(full_analysis)
-        potential_sections = []
-    else:
-        explained_sections = []
-        potential_sections = display_charges or _dedupe_charges(full_analysis)
-
-    # Build clean formatted fact summary lines from extracted metadata
+    # Extract clean incident narrative for grounded fact presentation
     meta_summary_lines = []
     if ocr_meta.get("fir_number") != "Not stated in the FIR":
         meta_summary_lines.append(f"• FIR No.: {ocr_meta['fir_number']}")
@@ -427,11 +378,6 @@ async def understand_fir(file: UploadFile = File(...)):
     if ocr_meta.get("informant") != "Not stated in the FIR":
         meta_summary_lines.append(f"• Informant: {ocr_meta['informant']}")
 
-    is_fallback = (ai_res.get("source") == "retrieval_fallback" or ai_res.get("pipeline_source") == "retrieval_fallback")
-
-    disclaimer_note = "\n\nThese are allegations/facts recorded in the FIR. They are not, by themselves, a final determination that an offence has been proved."
-
-    # Extract clean incident narrative (filtering out Act names, agency titles, and metadata headers)
     header_noise_keywords = [
         "fir no", "police station", "district", "date", "informant", "place of occurrence",
         "information report", "occurrence", "national investigation agency", "court of",
@@ -453,16 +399,133 @@ async def understand_fir(file: UploadFile = File(...)):
 
     narrative_snippet = " ".join(narrative_lines) if narrative_lines else ("\n".join(meta_summary_lines) if meta_summary_lines else cleaned_text[:350])
 
-    if is_fallback:
-        if has_sections_in_fir:
-            explained_sections = display_charges or _dedupe_charges(full_analysis)
-            potential_sections = []
-            reference_provisions = []
-        else:
-            explained_sections = []
-            potential_sections = []
-            reference_provisions = _dedupe_charges(full_analysis or charges_uncertain)
+    # Build clean explicit cards for Item 2 provisions
+    GENERIC_META_SECTIONS = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "167", "197", "211", "358"}
 
+    explicit_cards = []
+    seen_explicit = set()
+
+    for p in explicit_provisions:
+        sec = p["section"]
+        act = p["act"]
+        key = (sec, act)
+        if key in seen_explicit:
+            continue
+        seen_explicit.add(key)
+
+        act_lower = act.lower()
+        if "explosive" in act_lower:
+            title_val = f"Section {sec} - Offence under Explosive Substances Act, 1908"
+            if sec == "3":
+                title_val = "Section 3 - Punishment for causing explosion likely to endanger life or property"
+            elif sec == "5":
+                title_val = "Section 5 - Punishment for making or possessing explosives under suspicious circumstances"
+            bailable_val = "Non-Bailable"
+            cognizable_val = "Cognizable"
+            court_val = "Court of Session"
+            punishment_val = "Rigorous imprisonment for life or up to 10 years, and fine."
+        elif "unlawful activities" in act_lower or "uapa" in act_lower:
+            title_val = f"Section {sec} - Offence under Unlawful Activities (Prevention) Act, 1967"
+            if sec == "16":
+                title_val = "Section 16 - Punishment for terrorist act"
+            elif sec == "18":
+                title_val = "Section 18 - Punishment for conspiracy, etc."
+            elif sec == "20":
+                title_val = "Section 20 - Punishment for being member of terrorist gang or organisation"
+            bailable_val = "Non-Bailable"
+            cognizable_val = "Cognizable"
+            court_val = "Special Court / Court of Session"
+            punishment_val = "Imprisonment from 5 years up to life, or death (if death results), and fine."
+        elif "indian penal code" in act_lower or "ipc" in act_lower:
+            title_val = f"IPC Section {sec}"
+            if sec == "120B":
+                title_val = "IPC Section 120B - Punishment of criminal conspiracy"
+                bailable_val = "Same as for principal offence"
+                cognizable_val = "Cognizable if offence conspired is cognizable"
+                court_val = "Court by which principal offence is triable"
+                punishment_val = "Same as for principal offence conspired to be committed."
+            else:
+                bailable_val = "As per IPC Schedule 1"
+                cognizable_val = "Cognizable"
+                court_val = "Magistrate / Court of Session"
+                punishment_val = "As prescribed under IPC Schedule 1"
+        else:
+            title_val = f"{act} Section {sec}"
+            bailable_val = "As per statutory schedule"
+            cognizable_val = "Cognizable"
+            court_val = "Court of Session / Magistrate"
+            punishment_val = f"As prescribed under {act}"
+
+        card = {
+            "section": sec,
+            "act": act,
+            "title": title_val,
+            "bailable": bailable_val,
+            "cognizable": cognizable_val,
+            "court": court_val,
+            "punishment": punishment_val,
+            "law_requires": [f"Statutory requirements under Section {sec} of {act}."],
+            "fir_states": [f"The FIR explicitly records Item 2 allegation under {act} Section {sec}. {narrative_snippet[:200]}"],
+            "why_may_apply": [f"Explicitly recorded in Item 2 of the FIR document under {act}."],
+            "what_remains_uncertain": ["Subject to formal investigation, evidentiary verification, and trial proceedings."],
+            "assessment": f"Explicitly recorded in Item 2 of the FIR under {act} Section {sec}. Guilt depends on judicial proceedings.",
+            "applicability": "supported",
+            "status": "Supported"
+        }
+        explicit_cards.append(card)
+
+    # Process potential candidate BNS provisions from RAG
+    potential_cards = []
+    seen_potential = set()
+
+    for item in ai_res.get("analysis", []):
+        sec_str = str(item.get("section", "")).strip()
+        act_str = item.get("act") or item.get("act_name") or "Bharatiya Nyaya Sanhita, 2023"
+
+        if sec_str in GENERIC_META_SECTIONS:
+            continue
+        if (sec_str, act_str) in seen_explicit:
+            continue
+        if sec_str in seen_potential:
+            continue
+        seen_potential.add(sec_str)
+
+        law_req = item.get("law_requires") or item.get("core_elements") or [item.get("title", "Statutory requirement")]
+        fir_st = item.get("fir_states") or [f"The facts described in the FIR relate to {item.get('title', 'this offence')}."]
+        why_apply = item.get("why_may_apply") or [f"The allegations correspond to the statutory scope of Section {sec_str}."]
+        what_uncert = item.get("what_remains_uncertain") or ["Further investigation and legal proceedings required."]
+
+        pot_entry = {
+            "section": sec_str,
+            "act": act_str,
+            "clause": item.get("clause", ""),
+            "title": item.get("title", f"Section {sec_str}"),
+            "punishment": item.get("punishment", "As per BNS Schedule 1"),
+            "bailable": item.get("bailable", "As per BNS Schedule 1"),
+            "cognizable": item.get("cognizable", "Cognizable"),
+            "court": item.get("court", "Any Magistrate / Court of Session"),
+            "reasoning": item.get("reasoning", ""),
+            "applicability": "uncertain",
+            "status": "Uncertain",
+            "law_requires": law_req,
+            "fir_states": fir_st,
+            "why_may_apply": why_apply,
+            "what_remains_uncertain": what_uncert,
+            "assessment": f"Identified as a potentially relevant provision based on incident facts; legal applicability depends on evidence.",
+        }
+        potential_cards.append(pot_entry)
+
+    if has_sections_in_fir:
+        explained_sections = explicit_cards
+        potential_sections = potential_cards
+    else:
+        explained_sections = []
+        potential_sections = potential_cards
+
+    is_fallback = (ai_res.get("source") == "retrieval_fallback" or ai_res.get("pipeline_source") == "retrieval_fallback")
+    disclaimer_note = "\n\nThese are allegations/facts recorded in the FIR. They are not, by themselves, a final determination that an offence has been proved."
+
+    if is_fallback:
         plain_summary = (
             "Official police complaint document recorded. Automated legal reasoning is currently in degraded fallback mode. "
             "Relevant statutory provisions retrieved from the BNS legal corpus are provided below for reference only and do NOT represent established legal findings.\n\n"
@@ -471,7 +534,6 @@ async def understand_fir(file: UploadFile = File(...)):
             + disclaimer_note
         )
     else:
-        reference_provisions = []
         summary_base = ai_res.get("plain_summary") or ai_res.get("summary")
         import re
         noise_pattern = re.compile(
@@ -508,13 +570,12 @@ async def understand_fir(file: UploadFile = File(...)):
 
     # Dynamic case-relevant fallbacks for unestablished facts and clarifying details
     import re
-    offence_titles_lower = " ".join([c.get("title", "").lower() for c in display_charges])
+    offence_titles_lower = " ".join([c.get("title", "").lower() for c in (explained_sections + potential_sections)])
     is_rash_driving_case = any(
         ("rash" in c.get("title", "").lower() or "negligent driving" in c.get("title", "").lower())
-        and c.get("applicability") == "supported"
-        for c in display_charges
+        for c in (explained_sections + potential_sections)
     ) or bool(re.search(r'\b(?:rash|negligent)\s+driving\b|\bmotor\s+vehicle\s+accident\b', cleaned_text, re.IGNORECASE))
-    
+
     if is_rash_driving_case:
         default_unestablished = [
             "Whether the vehicle was operated in a rash or negligent manner at excessive speed.",
@@ -572,37 +633,49 @@ async def understand_fir(file: UploadFile = File(...)):
         "Identify witnesses mentioned in the FIR and seek legal assistance based on your role (informant/victim/accused)."
     ]
 
-    if has_sections_in_fir:
-        formatted_provs = []
-        for p in explicit_provisions:
-            sec = p.get("section", "")
-            act = p.get("act", "")
-            act_lower = act.lower()
-            if "unlawful activities" in act_lower or "uapa" in act_lower:
-                formatted_provs.append(f"UAPA Section {sec}")
-            elif "explosive" in act_lower:
-                formatted_provs.append(f"Explosive Substances Act Section {sec}")
-            elif "nagarik suraksha" in act_lower or "bnss" in act_lower:
-                formatted_provs.append(f"BNSS Section {sec}")
-            elif "indian penal code" in act_lower or "ipc" in act_lower:
-                formatted_provs.append(f"IPC Section {sec}")
-            elif "bns" in act_lower or "nyaya" in act_lower:
-                formatted_provs.append(f"BNS Section {sec}")
-            else:
-                formatted_provs.append(f"{act} Section {sec}" if act else f"Section {sec}")
+    # Build prov_label_str for bottom_line using exact explicit provisions
+    act_map = {}
+    for p in explicit_provisions:
+        act_title = p.get("act", "Bharatiya Nyaya Sanhita, 2023")
+        sec_num = p.get("section", "")
+        if act_title not in act_map:
+            act_map[act_title] = []
+        if sec_num and sec_num not in act_map[act_title]:
+            act_map[act_title].append(sec_num)
 
-        prov_label_str = ", ".join(formatted_provs) if formatted_provs else f"Section {', '.join(sections_recorded_in_fir)}"
-        bottom_line_val = ai_res.get("bottom_line") or (
+    prov_parts = []
+    for act_title, secs in act_map.items():
+        if len(secs) == 1:
+            prov_parts.append(f"{act_title} Section {secs[0]}")
+        else:
+            prov_parts.append(f"{act_title} Sections {', '.join(secs[:-1])} & {secs[-1]}")
+
+    if prov_parts:
+        if len(prov_parts) == 1:
+            prov_label_str = prov_parts[0]
+        elif len(prov_parts) == 2:
+            prov_label_str = f"{prov_parts[0]} and {prov_parts[1]}"
+        else:
+            prov_label_str = f"{', '.join(prov_parts[:-1])}, and {prov_parts[-1]}"
+    else:
+        active_secs = [c["section"] for c in potential_sections if c.get("section")]
+        prov_label_str = f"Section {', '.join(active_secs)}" if active_secs else "the relevant legal provisions"
+
+    if has_sections_in_fir:
+        bottom_line_val = (
             f"This FIR explicitly states allegations under {prov_label_str}. "
             "These provisions are relevant for legal consideration; the FIR itself does not establish guilt."
         )
     else:
-        active_secs = [c["section"] for c in display_charges if c.get("section")]
-        sec_label = f"Section {', '.join(active_secs)}" if active_secs else "the relevant BNS provisions"
-        bottom_line_val = ai_res.get("bottom_line") or (
-            f"Based on the facts recorded in this FIR, {sec_label} appears potentially relevant for consideration. "
+        bottom_line_val = (
+            f"Based on the facts recorded in this FIR, {prov_label_str} appears potentially relevant for consideration. "
             "The FIR itself does not explicitly record an offence section number, nor does it establish that the offence has been proved."
         )
+
+    full_analysis = explicit_cards + potential_cards
+    display_charges = explained_sections if explained_sections else potential_sections
+    charges_uncertain = potential_cards
+    reference_provisions = potential_cards if is_fallback and not has_sections_in_fir else []
 
     disclaimer_text = ai_res.get(
         "disclaimer",

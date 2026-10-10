@@ -8,6 +8,7 @@ import { getStoredUser } from '@/lib/auth'
 
 type ChargeItem = {
   section: string
+  act?: string
   title: string
   punishment?: string | string[]
   bailable?: string
@@ -1125,7 +1126,7 @@ export default function UnderstandPage() {
                                   )}
 
                                   <div className="text-[11px] text-gray-400 font-mono pt-1">
-                                    Source: BNS 2023 Section {c.section}
+                                    Source: {c.act || 'BNS 2023'} Section {c.section}
                                   </div>
                                 </div>
                               )}

@@ -242,7 +242,7 @@ class GroqLLMClient(LLMClient):
                 "model": self.model_name,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.0,
-                "timeout": 15.0
+                "timeout": 10.0
             }
             if is_json_mode:
                 req_kwargs["response_format"] = {"type": "json_object"}
@@ -295,7 +295,12 @@ class GeminiLLMClient(LLMClient):
 
         try:
             from google import genai
-            self.client = genai.Client(api_key=self.api_key)
+            from google.genai import types
+            try:
+                http_opts = types.HttpOptions(timeout=12000)
+                self.client = genai.Client(api_key=self.api_key, http_options=http_opts)
+            except Exception:
+                self.client = genai.Client(api_key=self.api_key)
         except Exception as e:
             raise RuntimeError(f"Failed to initialize Gemini client for model '{self.model_name}': {e}")
 
@@ -449,7 +454,7 @@ class OpenRouterLLMClient(LLMClient):
                 client = OpenAI(
                     base_url=self.base_url,
                     api_key=self.api_key,
-                    timeout=30.0,
+                    timeout=12.0,
                     max_retries=0,
                     default_headers={
                         "HTTP-Referer": "https://lawaid.app",
@@ -478,7 +483,7 @@ class OpenRouterLLMClient(LLMClient):
                         f"{self.base_url}/chat/completions",
                         headers=headers,
                         json=payload,
-                        timeout=30
+                        timeout=12
                     )
                     if resp.status_code != 200:
                         raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
@@ -499,7 +504,7 @@ class OpenRouterLLMClient(LLMClient):
                         method="POST"
                     )
                     try:
-                        with urllib.request.urlopen(req, timeout=30) as resp:
+                        with urllib.request.urlopen(req, timeout=12) as resp:
                             res_body = resp.read().decode("utf-8")
                             data = json.loads(res_body)
                             choices = data.get("choices", [])
@@ -582,7 +587,7 @@ class ProviderHealthTracker:
             info = self._health_map.get(key, {"consecutive_failures": 0})
             failures = info.get("consecutive_failures", 0) + 1
 
-            if error_category == "payment_required" or "402" in err_msg:
+            if error_category in ("payment_required", "quota_exhausted") or "402" in err_msg or "quota" in err_lower or "resource_exhausted" in err_lower or "insufficient_quota" in err_lower:
                 status = ProviderHealthStatus.QUOTA_EXHAUSTED
                 cooldown_sec = 3600
             elif "401" in err_msg or "user not found" in err_lower or "unauthorized" in err_lower:
@@ -641,9 +646,9 @@ def _classify_llm_error(err_msg: str) -> str:
     err_lower = err_msg.lower()
     if "401" in err_msg or "user not found" in err_lower or "unauthorized" in err_lower or "invalid api key" in err_lower:
         return "auth_disabled"
-    elif "402" in err_msg or "payment required" in err_lower or "insufficient_quota" in err_lower or "credit" in err_lower:
-        return "payment_required"
-    elif "429" in err_msg or "rate limit" in err_lower or "rate_limit" in err_lower or "quota" in err_lower or "resource_exhausted" in err_lower:
+    elif "402" in err_msg or "payment required" in err_lower or "insufficient_quota" in err_lower or "credit" in err_lower or "quota" in err_lower or "resource_exhausted" in err_lower or "free_tier_exceeded" in err_lower:
+        return "quota_exhausted"
+    elif "429" in err_msg or "rate limit" in err_lower or "rate_limit" in err_lower:
         return "rate_limited"
     elif "413" in err_msg or "too large" in err_lower or "context_length_exceeded" in err_lower or "request entity too large" in err_lower:
         return "request_too_large"
@@ -784,7 +789,8 @@ class MultiProviderLLMFailoverClient(LLMClient):
         self,
         prompt: str,
         max_tokens: Optional[int] = None,
-        workload: Union[Workload, str] = Workload.CITIZEN_FIR_ANALYSIS
+        workload: Union[Workload, str] = Workload.CITIZEN_FIR_ANALYSIS,
+        request_budget_sec: float = 25.0
     ) -> str:
         self.last_execution_trace = []
         self.active_provider_info = {}
@@ -801,8 +807,13 @@ class MultiProviderLLMFailoverClient(LLMClient):
         is_large = tot_est_tokens > GROQ_SAFE_REQUEST_TOKEN_BUDGET
 
         ordered_providers = self._get_ordered_providers(workload, is_large)
+        start_overall = time.time()
 
         for provider_client in ordered_providers:
+            if time.time() - start_overall >= request_budget_sec:
+                print(f"[LLM Failover Trace] Overall request time budget ({request_budget_sec}s) exceeded. Aborting failover chain.")
+                break
+
             provider_name = provider_client.__class__.__name__
             model_name = getattr(provider_client, "model_name", "unknown")
 
@@ -871,6 +882,10 @@ class MultiProviderLLMFailoverClient(LLMClient):
         if not attempted_any:
             print("[LLM Failover Trace] All providers were skipped on health check. Forcing attempt on available providers...")
             for provider_client in ordered_providers:
+                if time.time() - start_overall >= request_budget_sec:
+                    print(f"[LLM Failover Trace] Forced fallback overall request time budget ({request_budget_sec}s) exceeded. Aborting.")
+                    break
+
                 provider_name = provider_client.__class__.__name__
                 model_name = getattr(provider_client, "model_name", "unknown")
                 status, _ = self.health_tracker.get_status(provider_client)

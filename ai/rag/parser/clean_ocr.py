@@ -144,6 +144,19 @@ def extract_fir_metadata(cleaned_text: str) -> Dict[str, str]:
         r'Witness(?:es)?\s*[:\-]?\s*([^\n]+)',
     ])
 
+    # Post-process district and police_station to avoid header leakage
+    if district != "Not stated in the FIR":
+        district = re.sub(r'\s+(?:State|P\.S\.?|Police|FIR|RC|Date|Time).*$', '', district, flags=re.IGNORECASE).strip()
+        district = re.sub(r'^[,\s.:;\-\'\"\(\)]+|[,\s.:;\-\'\"\(\)]+$', '', district).strip()
+        if len(district) < 2 or district.lower() in ["details", "not specified", "unknown"]:
+            district = "Not stated in the FIR"
+
+    if police_station != "Not stated in the FIR":
+        police_station = re.sub(r'\s+(?:District|FIR|RC|Date|Time).*$', '', police_station, flags=re.IGNORECASE).strip()
+        police_station = re.sub(r'^[,\s.:;\-\'\"\(\)]+|[,\s.:;\-\'\"\(\)]+$', '', police_station).strip()
+        if len(police_station) < 2 or police_station.lower() in ["details", "not specified", "unknown"]:
+            police_station = "Not stated in the FIR"
+
     return {
         "fir_number": fir_number,
         "police_station": police_station,
@@ -158,11 +171,42 @@ def extract_fir_metadata(cleaned_text: str) -> Dict[str, str]:
     }
 
 
+def normalize_statute_title(raw_act: str) -> str:
+    """
+    Standardizes raw statute text to standard canonical legal titles.
+    """
+    if not raw_act:
+        return "Bharatiya Nyaya Sanhita, 2023"
+
+    cleaned = re.sub(r'^\s*(?:\([a-z0-9]+\)|[0-9]+\.|\*|\-)\s*', '', raw_act, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r'^[,\s.:;\-\'\"\(\)]+|[,\s.:;\-\'\"\(\)]+$', '', cleaned).strip()
+    act_lower = cleaned.lower()
+
+    if "explosive" in act_lower:
+        return "Explosive Substances Act, 1908"
+    if "unlawful" in act_lower or "uapa" in act_lower:
+        return "Unlawful Activities (Prevention) Act, 1967"
+    if "indian penal" in act_lower or "ipc" in act_lower:
+        return "Indian Penal Code, 1860"
+    if "nagarik" in act_lower or "bnss" in act_lower:
+        return "Bharatiya Nagarik Suraksha Sanhita, 2023"
+    if "bns" in act_lower or "nyaya" in act_lower:
+        return "Bharatiya Nyaya Sanhita, 2023"
+    if "arms" in act_lower:
+        return "Arms Act, 1959"
+    if "narcotic" in act_lower or "ndps" in act_lower:
+        return "Narcotic Drugs and Psychotropic Substances Act, 1985"
+    if "corruption" in act_lower:
+        return "Prevention of Corruption Act, 1988"
+
+    return cleaned if cleaned else "Bharatiya Nyaya Sanhita, 2023"
+
+
 def extract_explicit_fir_provisions(text: str) -> list:
     """
     Extracts explicit recorded provisions along with their specific statute names
     from FIR Item 2 (Acts & Sections).
-    Returns a list of dicts: [{'section': '16', 'act': 'Unlawful Activities (Prevention) Act, 1967'}, ...]
+    Returns a list of dicts: [{'section': '3', 'act': 'Explosive Substances Act, 1908'}, ...]
     """
     if not text:
         return []
@@ -170,25 +214,30 @@ def extract_explicit_fir_provisions(text: str) -> list:
     results = []
     seen = set()
 
+    # Match lines containing Act: ... Sections: ...
     for line in text.splitlines():
         line_s = line.strip()
-        if "section" in line_s.lower():
-            m = re.search(r'Act\s*[:\-]?\s*(.+?)\s+Sections?\s*[:\-]?\s*([0-9\(\)a-zA-Z\s/,]+)', line_s, re.IGNORECASE)
-            if m:
-                act_clean = m.group(1).strip().rstrip('.,;:')
-                if act_clean.lower() in ["item 2", "acts &", "acts and", "2.", "acts"]:
-                    continue
-                sec_raw = m.group(2)
-                sec_tokens = re.split(r'[/,;\s]+', sec_raw)
-                for tok in sec_tokens:
-                    tok = tok.strip().rstrip('.,;:/-')
-                    if tok:
-                        m_sec = re.match(r'^(\d{1,4}(?:\([a-zA-Z0-9]+\))*[a-zA-Z]?)$', tok)
-                        if m_sec:
-                            sec_val = m_sec.group(1)
-                            if (sec_val, act_clean) not in seen:
-                                seen.add((sec_val, act_clean))
-                                results.append({"section": sec_val, "act": act_clean})
+        if not line_s:
+            continue
+        m = re.search(r'\bAct\s*[:\-]\s*(.+?)\s+Sections?\s*[:\-]\s*([0-9\(\)a-zA-Z\s/,&]+)', line_s, re.IGNORECASE)
+        if m:
+            act_raw = m.group(1).strip()
+            sec_raw = m.group(2).strip()
+
+            act_clean = normalize_statute_title(act_raw)
+            if act_clean.lower() in ["item 2", "acts &", "acts and", "2.", "acts"]:
+                continue
+
+            sec_tokens = re.split(r'[/,;&\s]+', sec_raw)
+            for tok in sec_tokens:
+                tok = tok.strip().rstrip('.,;:/-')
+                if tok and tok.lower() not in ["and", "&", "sec", "sections", "section", "act"]:
+                    m_sec = re.match(r'^(\d{1,4}(?:\([a-zA-Z0-9]+\))*[a-zA-Z]?)$', tok)
+                    if m_sec:
+                        sec_val = m_sec.group(1)
+                        if (sec_val, act_clean) not in seen:
+                            seen.add((sec_val, act_clean))
+                            results.append({"section": sec_val, "act": act_clean})
 
     if not results:
         bns_sections = extract_explicit_fir_sections(text)
