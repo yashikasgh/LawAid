@@ -154,3 +154,79 @@ def extract_fir_metadata(cleaned_text: str) -> Dict[str, str]:
         "injuries_damage": injuries_damage,
         "witnesses": witnesses
     }
+
+
+def extract_explicit_fir_sections(text: str) -> list:
+    """
+    Extracts canonical recorded offence sections strictly from FIR Item 2 (Acts & Sections).
+    Parses slash/comma-separated section cells (e.g., '134/303(2)' -> ['134', '303(2)']),
+    preserves sub-sections (e.g., '303(2)'), verifies BNS Act context, deduplicates entries,
+    and rejects narrative/unrelated numbers.
+    """
+    if not text:
+        return []
+
+    found_sections = []
+    seen = set()
+
+    def _clean_and_add_section(sec_token: str):
+        sec_token = sec_token.strip().rstrip('.,;:/-')
+        if not sec_token:
+            return
+        # Match valid BNS section format: e.g. 134, 303(2), 61(2), 190(2), 197(1)
+        m = re.match(r'^(\d{1,3}(?:\([a-zA-Z0-9]+\))*[a-zA-Z]?)$', sec_token)
+        if m:
+            full_sec = m.group(1)
+            base_num_match = re.match(r'^\d+', full_sec)
+            if base_num_match:
+                num = int(base_num_match.group())
+                # Valid BNS section range (1 to 359)
+                if 1 <= num <= 359 and full_sec not in seen:
+                    seen.add(full_sec)
+                    found_sections.append(full_sec)
+
+    def _parse_section_blob(blob: str):
+        # Split by slashes, commas, 'and', semicolons, newlines, or spaces
+        tokens = re.split(r'[/,;\s]+', blob)
+        for tok in tokens:
+            _clean_and_add_section(tok)
+
+    # 1. Primary: Parse from Item 2 / Acts & Sections structured content
+    # Pair matching for "Act:" and "Sections:"
+    act_sec_pairs = re.findall(
+        r'Act\s*[:\-]?\s*([^\n]+?)(?:\n|\s)+Sections?\s*[:\-]?\s*([^\n]+)',
+        text,
+        re.IGNORECASE
+    )
+
+    for act_text, sec_text in act_sec_pairs:
+        act_upper = act_text.upper()
+        if "BNS" in act_upper or "BHARATIYA NYAYA" in act_upper or "NYAYA SANHITA" in act_upper:
+            _parse_section_blob(sec_text)
+
+    if not found_sections:
+        # Search Item 2 block text if pair matching missed layout
+        item2_patterns = [
+            r'(?:2\.\s*(?:\([a-z0-9]+\)\s*)?Act|Item\s*2|Acts?\s*(?:&|and)?\s*Sections?)\s*[:\-]?\s*([\s\S]{1,400}?)(?=\n\s*3\.|3\.\s*Occurrence|\n\s*4\.|4\.\s*Type|\n\s*12\.|$)',
+        ]
+        for pat in item2_patterns:
+            for m in re.finditer(pat, text, re.IGNORECASE):
+                block = m.group(1)
+                if re.search(r'\b(?:BNS|BHARATIYA\s+NYAYA\s+SANHITA|BHARATIYA\s+NYAYA)\b', block, re.IGNORECASE):
+                    sec_matches = re.finditer(r'Sections?\s*[:\-]?\s*([0-9\(\)a-zA-Z\s/,]+)', block, re.IGNORECASE)
+                    for sm in sec_matches:
+                        _parse_section_blob(sm.group(1))
+
+    # 2. Corroborating fallback ONLY if Item 2 extraction found no sections:
+    # Require explicit BNS tag (e.g. "U/s 134/303(2) BNS" or "Section 134/303(2) BNS")
+    if not found_sections:
+        explicit_bns_pattern1 = r'(?:\bsec(?:tion)?s?\.?|\bu[/\\]?s\.?|\bunder\s+sections?)\s*([0-9\(\)a-zA-Z\s/,]+?)\s*(?:BNS|BHARATIYA\s+NYAYA\s+SANHITA)\b'
+        for m in re.finditer(explicit_bns_pattern1, text, re.IGNORECASE):
+            _parse_section_blob(m.group(1))
+
+        explicit_bns_pattern2 = r'\b(?:BNS|BHARATIYA\s+NYAYA\s+SANHITA)\s*(?:u[/\\]?s\.?|sec(?:tion)?s?\.?)?\s*([0-9\(\)a-zA-Z\s/,]+)'
+        for m in re.finditer(explicit_bns_pattern2, text, re.IGNORECASE):
+            first_line = m.group(1).split('\n')[0]
+            _parse_section_blob(first_line[:40])
+
+    return found_sections

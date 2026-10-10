@@ -459,7 +459,7 @@ def test_regression_theft_generic_phone_theft():
     class MockTheftLLM:
         def generate(self, prompt, **kwargs):
             if "RETRIEVED BNS LEGAL CONTEXT:" in prompt:
-                m = re.search(r'"id":\s*"(bns_303[^"]+)"', prompt)
+                m = re.search(r'"id":\s*"([^"]*303[^"]*)"', prompt) or re.search(r'"id":\s*"([^"]+)"', prompt)
                 doc_id = m.group(1) if m else "bns_303_303(2)"
                 return json.dumps({
                     "status": "success",
@@ -497,7 +497,7 @@ def test_regression_theft_under_5000_restored():
     class MockProvisoLLM:
         def generate(self, prompt, **kwargs):
             if "RETRIEVED BNS LEGAL CONTEXT:" in prompt:
-                m = re.search(r'"id":\s*"(bns_303[^"]+)"', prompt)
+                m = re.search(r'"id":\s*"(bns_303[^"]*)"', prompt)
                 doc_id = m.group(1) if m else "bns_303_303(2)"
                 return json.dumps({
                     "status": "success",

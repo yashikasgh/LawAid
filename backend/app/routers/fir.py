@@ -202,61 +202,15 @@ async def verify_fir_route(
 
 # ── Helper for BNS Section Detection ─────────────────────────────────────────
 
-import re
+from ai.rag.parser.clean_ocr import extract_explicit_fir_sections
 
 def detect_bns_sections(text: str) -> list:
     """
-    Detects BNS/IPC section references from OCR-extracted or document text generically.
-    Handles common formats:
-        Section 281, Sec. 281, Sec 281, Sections 281/285
-        u/s 281 BNS, U/S 281/285, U/s 281, Under Section 281
-        281 BNS, BNS 281, 281 IPC, IPC 281
-    Returns a sorted deduplicated list of section number strings.
+    Detects canonical BNS offence sections explicitly recorded in FIR Item 2 (Acts & Sections).
+    Delegates to extract_explicit_fir_sections in clean_ocr.py.
     """
-    if not text:
-        return []
-    found = set()
+    return extract_explicit_fir_sections(text)
 
-    # 1. Matches like "Sections 281/285", "Sec. 281/285", "U/S 281/285", "u/s 281, 285", "Section 281"
-    prefix_pattern = r'(?:\bsec(?:tion)?s?\.?|\bu[/\\]?s\.?|\bunder\s+sections?)\s*([0-9\(\)a-zA-Z\s/,]+)'
-    for m in re.finditer(prefix_pattern, text, re.IGNORECASE):
-        chunk = m.group(1)
-        sec_matches = re.findall(r'\b(\d+(?:\([a-zA-Z0-9]+\))?)\b', chunk[:40])
-        for sec in sec_matches:
-            match_num = re.match(r'\d+', sec)
-            if match_num:
-                num = int(match_num.group())
-                if 1 <= num <= 359:
-                    found.add(sec)
-
-    # 2. Matches like "281 BNS", "281/285 BNS", "BNS 281", "BNS 281/285", "281 IPC", "IPC 281"
-    bns_pattern1 = r'\b(?:BNS|IPC)\s*([0-9\(\)a-zA-Z\s/,]+)'
-    for m in re.finditer(bns_pattern1, text, re.IGNORECASE):
-        chunk = m.group(1)
-        sec_matches = re.findall(r'\b(\d+(?:\([a-zA-Z0-9]+\))?)\b', chunk[:40])
-        for sec in sec_matches:
-            match_num = re.match(r'\d+', sec)
-            if match_num:
-                num = int(match_num.group())
-                if 1 <= num <= 359:
-                    found.add(sec)
-
-    bns_pattern2 = r'([0-9\(\)a-zA-Z\s/,]+)\s*(?:BNS|IPC)\b'
-    for m in re.finditer(bns_pattern2, text, re.IGNORECASE):
-        chunk = m.group(1)
-        sec_matches = re.findall(r'\b(\d+(?:\([a-zA-Z0-9]+\))?)\b', chunk[-40:])
-        for sec in sec_matches:
-            match_num = re.match(r'\d+', sec)
-            if match_num:
-                num = int(match_num.group())
-                if 1 <= num <= 359:
-                    found.add(sec)
-
-    def _sec_key(val: str) -> int:
-        m = re.match(r'\d+', val)
-        return int(m.group()) if m else 0
-
-    return sorted(list(found), key=_sec_key)
 
 
 # ── Helper for OCR Extraction ────────────────────────────────────────────────
@@ -387,12 +341,12 @@ async def understand_fir(file: UploadFile = File(...)):
     try:
         if has_sections_in_fir:
             ai_res = _run_pipeline(
-                raw_incident=cleaned_text[:2500],
+                raw_incident=cleaned_text,
                 target_sections=sections_recorded_in_fir
             )
         else:
             ai_res = _run_pipeline(
-                raw_incident=cleaned_text[:2500]
+                raw_incident=cleaned_text
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI Legal Analysis failed: {str(e)}")
@@ -447,11 +401,11 @@ async def understand_fir(file: UploadFile = File(...)):
     display_charges = _dedupe_charges(charges_supported or full_analysis)
 
     if has_sections_in_fir:
-        explained_sections = display_charges
+        explained_sections = display_charges or _dedupe_charges(full_analysis)
         potential_sections = []
     else:
         explained_sections = []
-        potential_sections = display_charges
+        potential_sections = display_charges or _dedupe_charges(full_analysis)
 
     # Build clean formatted fact summary lines from extracted metadata
     meta_summary_lines = []
@@ -472,34 +426,54 @@ async def understand_fir(file: UploadFile = File(...)):
 
     disclaimer_note = "\n\nThese are allegations/facts recorded in the FIR. They are not, by themselves, a final determination that an offence has been proved."
 
-    # Build clean factual narrative snippet from cleaned_text (excluding header lines)
+    # Extract clean incident narrative (filtering out Act names, agency titles, and metadata headers)
+    header_noise_keywords = [
+        "fir no", "police station", "district", "date", "informant", "place of occurrence",
+        "information report", "occurrence", "national investigation agency", "court of",
+        "bharatiya nyaya sanhita", "explosive substances act", "unlawful activities",
+        "prevention of corruption", "indian penal code", "code of criminal procedure",
+        "bharatiya nagarik suraksha", "arms act", "narcotic drugs", "act:", "acts:",
+        "sections:", "section:", "item 1", "item 2", "item 3", "item 4", "sl. no", "p.s."
+    ]
+
     narrative_lines = []
     for line in cleaned_text.splitlines():
         line_s = line.strip()
-        if len(line_s) > 25 and not any(line_s.lower().startswith(h) for h in ["fir no", "police station", "district", "date", "informant", "place of occurrence", "information report", "occurrence"]):
-            narrative_lines.append(line_s)
-        if len(narrative_lines) >= 3:
-            break
+        if len(line_s) > 20:
+            line_lower = line_s.lower()
+            if not any(k in line_lower for k in header_noise_keywords):
+                narrative_lines.append(line_s)
+                if len(narrative_lines) >= 4:
+                    break
 
-    narrative_snippet = " ".join(narrative_lines) if narrative_lines else cleaned_text[:350]
+    narrative_snippet = " ".join(narrative_lines) if narrative_lines else ("\n".join(meta_summary_lines) if meta_summary_lines else cleaned_text[:350])
 
     if is_fallback:
-        explained_sections = []
-        potential_sections = []
-        display_charges = []
-        # Return all retrieved candidate provisions for reference without arbitrary cap
-        reference_provisions = _dedupe_charges(full_analysis or charges_uncertain)
+        if has_sections_in_fir:
+            explained_sections = display_charges or _dedupe_charges(full_analysis)
+            potential_sections = []
+            reference_provisions = []
+        else:
+            explained_sections = []
+            potential_sections = []
+            reference_provisions = _dedupe_charges(full_analysis or charges_uncertain)
+
         plain_summary = (
             "Official police complaint document recorded. Automated legal reasoning is currently in degraded fallback mode. "
             "Relevant statutory provisions retrieved from the BNS legal corpus are provided below for reference only and do NOT represent established legal findings.\n\n"
             "Key Facts Stated in FIR:\n"
-            + (narrative_snippet or ("\n".join(meta_summary_lines) if meta_summary_lines else cleaned_text[:350]))
+            + narrative_snippet
             + disclaimer_note
         )
     else:
         reference_provisions = []
         summary_base = ai_res.get("plain_summary") or ai_res.get("summary")
-        if summary_base and len(summary_base.strip()) > 30 and "allegations relating to" not in summary_base.lower():
+        import re
+        noise_pattern = re.compile(
+            r'(NATIONAL\s+INVESTIGATION|BHARATIYA\s+NYAYA|EXPLOSIVE\s+SUBSTANCES|UNLAWFUL\s+ACTIVITIES|IN\s+THE\s+COURT|POLICE\s+STATION)',
+            re.IGNORECASE
+        )
+        if summary_base and len(summary_base.strip()) > 30 and not noise_pattern.search(summary_base) and "allegations relating to" not in summary_base.lower():
             plain_summary = summary_base.strip()
             if "These are allegations/facts recorded in the FIR" not in plain_summary:
                 plain_summary += disclaimer_note
