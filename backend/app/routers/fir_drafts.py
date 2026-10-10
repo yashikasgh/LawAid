@@ -36,7 +36,12 @@ def save_draft(
         collection = mongo_db["fir_drafts"]
         if draft_id and ObjectId.is_valid(draft_id):
             draft_data.setdefault("created_at", now_iso)
-            collection.update_one({"_id": ObjectId(draft_id)}, {"$set": draft_data})
+            result = collection.update_one(
+                {"_id": ObjectId(draft_id), "officer_id": current_user.id},
+                {"$set": draft_data},
+            )
+            if result.matched_count == 0:
+                raise HTTPException(status_code=404, detail="Draft not found or not authorized")
             return {"draft_id": str(draft_id), "status": "updated"}
         else:
             draft_data["created_at"] = now_iso
@@ -52,6 +57,8 @@ def save_draft(
         json_payload = json.dumps(draft_data)
         existing = db.query(FIRDraft).filter(FIRDraft.draft_id == str(draft_id)).first()
         if existing:
+            if existing.officer_id != current_user.id:
+                raise HTTPException(status_code=404, detail="Draft not found or not authorized")
             existing.data = json_payload
             db.commit()
             return {"draft_id": str(draft_id), "status": "updated"}

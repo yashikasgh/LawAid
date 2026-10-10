@@ -1,23 +1,18 @@
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.core.database import get_db
-from app.routers import auth, fir, police, chat, complaints, fir_drafts
+from app.core.config import settings
+from app.routers import auth, fir, police, chat, complaints, fir_drafts, lawyer_documents, lawyer_workflow
 from app.middleware.audit_log import audit_log_middleware
 
 app = FastAPI(title="LawAid Backend", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:3002",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-        "http://127.0.0.1:3002",
-    ],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
@@ -25,11 +20,27 @@ app.add_middleware(
 
 app.middleware("http")(audit_log_middleware)
 
+_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+@app.middleware("http")
+async def csrf_origin_check(request: Request, call_next):
+    """Reject cross-origin state-changing requests authenticated by cookie."""
+    if (
+        request.method in _UNSAFE_METHODS
+        and settings.AUTH_COOKIE_NAME in request.cookies
+        and not request.headers.get("authorization")
+    ):
+        origin = request.headers.get("origin")
+        if origin and origin not in settings.cors_origins:
+            return JSONResponse(status_code=403, content={"detail": "Cross-origin request rejected"})
+    return await call_next(request)
+
 # Core Routers (Mounted directly and under /api prefix for 100% frontend API route compatibility)
 from fastapi import APIRouter
 api_router = APIRouter(prefix="/api")
 
-for _r in [auth.router, fir_drafts.router, fir.router, police.router, chat.router, complaints.router]:
+for _r in [auth.router, fir_drafts.router, fir.router, police.router, chat.router, complaints.router, lawyer_documents.router, lawyer_workflow.router]:
     api_router.include_router(_r)
     app.include_router(_r)
 

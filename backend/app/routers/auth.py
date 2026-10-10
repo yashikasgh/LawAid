@@ -1,6 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException
+import hashlib
+import secrets
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+from app.core.config import settings
 from app.core.security import hash_password, verify_password, create_access_token
 from app.core.deps import get_current_user
 from app.models.user import User
@@ -8,14 +14,37 @@ from app.models.schemas import UserCreate, UserLoginRequest, UserResponse, Token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+
+def _normalized_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def _set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=settings.AUTH_COOKIE_NAME,
+        value=token,
+        max_age=settings.JWT_EXPIRY_HOURS * 60 * 60,
+        httponly=True,
+        secure=settings.AUTH_COOKIE_SECURE,
+        samesite=settings.AUTH_COOKIE_SAMESITE,
+        path="/",
+    )
+
 @router.post("/register", response_model=UserResponse)
 def register(user_in: UserCreate, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.email == user_in.email).first()
+    if user_in.role != "citizen":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Police and Lawyer accounts must be provisioned by an authorized administrator.",
+        )
+
+    email = _normalized_email(str(user_in.email))
+    existing = db.query(User).filter(func.lower(User.email) == email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
     new_user = User(
-        email=user_in.email,
+        email=email,
         password_hash=hash_password(user_in.password),
         role=user_in.role,
     )
@@ -25,9 +54,10 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
     return new_user
 
 @router.post("/login", response_model=Token)
-def login(user_in: UserLoginRequest, db: Session = Depends(get_db)):
+def login(user_in: UserLoginRequest, response: Response, db: Session = Depends(get_db)):
     """Login endpoint. Enforces that the portal role matches the user's actual DB role."""
-    user = db.query(User).filter(User.email == user_in.email).first()
+    email = _normalized_email(str(user_in.email))
+    user = db.query(User).filter(func.lower(User.email) == email).first()
     
     if not user or not verify_password(user_in.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -40,56 +70,51 @@ def login(user_in: UserLoginRequest, db: Session = Depends(get_db)):
 
     # JWT role comes from the TRUSTED DATABASE record, not from the client request
     token = create_access_token({"sub": str(user.id), "role": user.role})
+    _set_session_cookie(response, token)
     return {"access_token": token}
 
 @router.post("/refresh", response_model=Token)
-def refresh_token(current_user: User = Depends(get_current_user)):
+def refresh_token(response: Response, current_user: User = Depends(get_current_user)):
     """Refresh JWT. Requires a valid existing JWT — prevents arbitrary user ID refresh."""
     token = create_access_token({"sub": str(current_user.id), "role": current_user.role})
+    _set_session_cookie(response, token)
     return {"access_token": token}
 
 @router.post("/logout")
-def logout():
-    return {"message": "Logged out successfully. Please discard your token client-side."}
-import uuid
-import datetime
+def logout(response: Response):
+    response.delete_cookie(key=settings.AUTH_COOKIE_NAME, path="/")
+    return {"message": "Logged out successfully."}
+
 from app.models.password_reset import PasswordReset
 from app.models.schemas import ForgotPasswordRequest, ResetPasswordRequest
 
 @router.post("/forgot-password")
 def forgot_password(body: ForgotPasswordRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == body.email).first()
+    email = _normalized_email(str(body.email))
+    user = db.query(User).filter(func.lower(User.email) == email).first()
     if not user:
         # Do not reveal that the email does not exist
-        return {"message": "If that email is registered, a password reset link has been created.", "reset_token": None}
+        return {"message": "If that email is registered, password reset instructions will be sent."}
     
     # Generate secure random token
-    raw_token = uuid.uuid4().hex + uuid.uuid4().hex
-    
-    # In a real app we would hash the token before storing it.
-    # For simplicity and to allow the frontend to use it from the response, we will just use the raw_token as the token_hash 
-    # (since the instructions say "log the reset URL/token only in development or expose it through a clearly marked development response").
-    
+    raw_token = secrets.token_urlsafe(48)
     reset_record = PasswordReset(
         user_id=user.id,
-        token_hash=raw_token, # Normally hash this, but we keep it simple for demo
-        expires_at=datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
+        token_hash=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
     )
     db.add(reset_record)
     db.commit()
     
-    # Development-safe reset mechanism
-    return {
-        "message": "If that email is registered, a password reset link has been created.",
-        "dev_note": "DEVELOPMENT ONLY: Use this token in the reset password flow.",
-        "reset_token": raw_token
-    }
+    # Delivery is delegated to deployment email infrastructure. Raw reset
+    # tokens and account existence are never exposed in an API response.
+    return {"message": "If that email is registered, password reset instructions will be sent."}
 
 @router.post("/reset-password")
 def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
-    # Find the token
+    token_hash = hashlib.sha256(body.token.encode("utf-8")).hexdigest()
     reset_record = db.query(PasswordReset).filter(
-        PasswordReset.token_hash == body.token,
+        PasswordReset.token_hash == token_hash,
         PasswordReset.used == False
     ).first()
     
@@ -97,7 +122,10 @@ def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid or already used reset token")
         
     # Check expiration
-    if reset_record.expires_at < datetime.datetime.now(datetime.timezone.utc):
+    expires_at = reset_record.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Reset token has expired")
         
     # Update password

@@ -1,6 +1,6 @@
 from passlib.context import CryptContext
 from jose import jwt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from app.core.config import settings
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer
@@ -12,15 +12,18 @@ def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except (TypeError, ValueError):
+        return False
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(hours=settings.JWT_EXPIRY_HOURS)
+    expire = datetime.now(timezone.utc) + timedelta(hours=settings.JWT_EXPIRY_HOURS)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.JWT_SECRET, algorithm="HS256")
 
-oauth2_scheme = HTTPBearer()
+oauth2_scheme = HTTPBearer(auto_error=False)
 def decode_access_token(token: str) -> dict:
     try:
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])

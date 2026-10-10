@@ -1,7 +1,16 @@
+
 'use client'
 
 import Navbar from '@/components/Navbar'
 import { getStoredUser } from '@/lib/auth'
+import {
+  ArrowRight,
+  CalendarDays,
+  FileSearch,
+  Files,
+  BookOpen,
+} from 'lucide-react'
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 
 export default function LawyerDashboard() {
@@ -11,128 +20,116 @@ export default function LawyerDashboard() {
     setUser(getStoredUser())
   }, [])
 
+  const features = [
+    {
+      title: 'Case Documents',
+      description:
+        'Upload and organize case documents to begin reviewing the information relevant to your case.',
+      href: '/lawyer/documents',
+      icon: Files,
+      action: 'Open Documents',
+    },
+    {
+      title: 'AI Case Analysis',
+      description:
+        'Review extracted facts, parties, locations, and other information from your case documents.',
+      href: '/lawyer/analysis',
+      icon: FileSearch,
+      action: 'Analyze Case',
+    },
+    {
+      title: 'Case Timeline',
+      description:
+        'Review and organize important case events in chronological order.',
+      href: '/lawyer/timeline',
+      icon: CalendarDays,
+      action: 'View Timeline',
+    },
+    {
+      title: 'Case Summary & Export',
+      description:
+        'Review key case details and prepare a structured summary for export.',
+      href: '/lawyer/summary',
+      icon: BookOpen,
+      action: 'View Summary',
+    },
+  ]
+
   return (
     <>
       <Navbar />
 
       <main className="relative min-h-screen overflow-hidden">
-
-        {/* BACKGROUND IMAGE */}
+        {/* Background matching the existing LawAid dashboards */}
         <div className="fixed inset-0 -z-10">
           <img
             src="/images/lawaid-citizen-dashboard.png"
-            alt="LawAid legal background"
+            alt=""
             className="h-full w-full object-cover object-center"
           />
         </div>
+        <div className="fixed inset-0 -z-10 bg-[#f7f4ec]/55" />
 
-        {/* SOFT LIGHT OVERLAY */}
-        <div className="fixed inset-0 -z-10 bg-white/25" />
+        <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8">
+          {/* Welcome section */}
+          <section className="mb-10 text-center">
+            <p className="text-xs font-medium uppercase tracking-[0.3em] text-[#12335b]">
+              LAWYER PORTAL
+            </p>
 
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10">
-
-          {/* Header */}
-          <div className="mb-10 text-center">
-
-            <div className="inline-flex items-center justify-center gap-4 mb-5">
-
-              <span className="text-[11px] tracking-[0.3em] uppercase text-[#052d53] font-medium">
-                LAWYER PORTAL
-              </span>
-            </div>
-
-            <h1 className="font-serif text-4xl md:text-5xl font-semibold text-[#052d53] tracking-[-0.025em]">
+            <h1 className="mt-5 font-serif text-4xl font-bold tracking-tight text-[#0b3155] sm:text-5xl md:text-6xl">
               Lawyer Dashboard
             </h1>
 
-            <p className="mt-3 text-[#052d53] text-lg">
+            <p className="mt-4 text-lg text-[#123b60] sm:text-xl">
               Welcome, {user?.email || 'Lawyer'}
             </p>
 
-            <p className="mt-1 text-sm text-[#052d53]">
-              Review cases, research legal information, and explore BNS sections.
+            <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-[#234d72] sm:text-base">
+              Organize case documents, review AI-assisted analysis, and prepare
+              structured case summaries.
             </p>
-
-          </div>
-
-          {/* Main Features */}
-          <section>
-
-            <div className="flex items-end justify-between mb-5">
-              <div>
-                <h2 className="font-serif text-3xl font-semibold text-[#052d53]">
-                  Legal Tools
-                </h2>
-
-                <div className="mt-3 h-px w-12 bg-[#b98528]" />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-
-              {/* My Cases */}
-              <div className="group min-h-[245px] rounded-[18px] border border-white/70 bg-white/65 backdrop-blur-md shadow-[0_15px_40px_rgba(18,51,91,0.12)] p-7 transition-all duration-300 hover:-translate-y-1 hover:bg-white/80 hover:shadow-[0_20px_50px_rgba(18,51,91,0.18)]">
-
-                {/* Icon */}
-                <div className="w-14 h-14 rounded-[12px] border border-[#d2a14b]/50 bg-[#f8f6f1]/70 flex items-center justify-center text-2xl mb-6 transition-transform duration-300 group-hover:-translate-y-1">
-                  📁
-                </div>
-
-                {/* Title */}
-                <h3 className="font-serif text-[27px] font-semibold text-[#12335B] group-hover:text-[#b98528] transition-colors">
-                  My Cases
-                </h3>
-
-                {/* Description */}
-                <p className="mt-3 text-[#315b82] leading-relaxed">
-                  View and manage assigned cases.
-                </p>
-
-              </div>
-
-              {/* Case Research */}
-              <div className="group min-h-[245px] rounded-[18px] border border-white/70 bg-white/65 backdrop-blur-md shadow-[0_15px_40px_rgba(18,51,91,0.12)] p-7 transition-all duration-300 hover:-translate-y-1 hover:bg-white/80 hover:shadow-[0_20px_50px_rgba(18,51,91,0.18)]">
-
-                {/* Icon */}
-                <div className="w-14 h-14 rounded-[12px] border border-[#d2a14b]/50 bg-[#f8f6f1]/70 flex items-center justify-center text-2xl mb-6 transition-transform duration-300 group-hover:-translate-y-1">
-                  🔎
-                </div>
-
-                {/* Title */}
-                <h3 className="font-serif text-[27px] font-semibold text-[#12335B] group-hover:text-[#b98528] transition-colors">
-                  Case Research
-                </h3>
-
-                {/* Description */}
-                <p className="mt-3 text-[#315b82] leading-relaxed">
-                  Review case documents and legal information.
-                </p>
-
-              </div>
-
-              {/* IPC → BNS */}
-              <div className="group min-h-[245px] rounded-[18px] border border-white/70 bg-white/65 backdrop-blur-md shadow-[0_15px_40px_rgba(18,51,91,0.12)] p-7 transition-all duration-300 hover:-translate-y-1 hover:bg-white/80 hover:shadow-[0_20px_50px_rgba(18,51,91,0.18)]">
-
-                {/* Icon */}
-                <div className="w-14 h-14 rounded-[12px] border border-[#d2a14b]/50 bg-[#f8f6f1]/70 flex items-center justify-center text-2xl mb-6 transition-transform duration-300 group-hover:-translate-y-1">
-                  ⚖️
-                </div>
-
-                {/* Title */}
-                <h3 className="font-serif text-[27px] font-semibold text-[#12335B] group-hover:text-[#b98528] transition-colors">
-                  IPC → BNS
-                </h3>
-
-                {/* Description */}
-                <p className="mt-3 text-[#315b82] leading-relaxed">
-                  Convert IPC sections to corresponding BNS sections.
-                </p>
-
-              </div>
-
-            </div>
           </section>
 
+          {/* Feature cards */}
+          <section className="mx-auto max-w-6xl">
+            <h2 className="mb-7 font-serif text-3xl font-bold text-[#0b3155] sm:text-4xl">
+              Lawyer Tools
+            </h2>
+
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+              {features.map((feature) => {
+                const Icon = feature.icon
+
+                return (
+                  <Link
+                    key={feature.title}
+                    href={feature.href}
+                    className="group flex min-h-[300px] flex-col rounded-[22px] border border-white/80 bg-white/65 p-7 shadow-[0_10px_35px_rgba(18,51,91,0.10)] backdrop-blur-md transition duration-200 hover:-translate-y-1 hover:border-[#d6b56d] hover:bg-white/75 hover:shadow-[0_16px_40px_rgba(18,51,91,0.15)] sm:p-8"
+                  >
+                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-[#d9b86f]/70 bg-white/65 text-[#123b60]">
+                      <Icon size={29} strokeWidth={1.8} />
+                    </div>
+
+                    <h3 className="mt-7 font-serif text-2xl font-bold text-[#123b60] sm:text-3xl">
+                      {feature.title}
+                    </h3>
+
+                    <p className="mt-4 text-base leading-[1.9] text-[#426b91] sm:text-lg">
+                      {feature.description}
+                    </p>
+
+                    <div className="mt-auto flex items-center gap-3 pt-6 text-base font-semibold text-[#12335b]">
+                      <span>{feature.action}</span>
+                      <span className="flex h-10 w-10 items-center justify-center rounded-full border border-[#c18a25] text-[#c18a25] transition group-hover:bg-[#c18a25] group-hover:text-white">
+                        <ArrowRight size={19} />
+                      </span>
+                    </div>
+                  </Link>
+                )
+              })}
+            </div>
+          </section>
         </div>
       </main>
     </>

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.mongo import mongo_available
 
 from app.core.database import get_db
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, require_role
 from app.services.fir_auth import register_fir, verify_fir
 from app.models.user import User
 from app.services.duplicate_check import check_duplicate
@@ -48,7 +48,7 @@ class IncidentAnalysisRequest(BaseModel):
 
 
 @router.post("/analyze")
-def analyze_incident_endpoint(body: IncidentAnalysisRequest):
+def analyze_incident_endpoint(body: IncidentAnalysisRequest, current_user: User = Depends(get_current_user)):
     """
     Executes the end-to-end LawAid AI Legal Analysis Pipeline on raw incident text.
     Handles Privacy Sanitization -> NER -> Query Generation -> Retrieval ->
@@ -121,7 +121,7 @@ def search_bns(query: str = Query(..., min_length=3)):
 # ── FIR Upload ───────────────────────────────────────────────────────────────
 
 @router.post("/upload")
-async def upload_fir(file: UploadFile = File(...)):
+async def upload_fir(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
     if file.content_type not in ["application/pdf", "image/jpeg", "image/png"]:
         raise HTTPException(status_code=400, detail="Only PDF, JPEG, PNG files allowed")
 
@@ -152,7 +152,7 @@ async def register_fir_route(
     file: UploadFile = File(...),
     station_code: str = "PS001",
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("police")),
 ):
     """
     Register a FIR. Extracts text from the uploaded file and stores it as complaint_text
@@ -285,7 +285,7 @@ def _extract_text_with_ocr(contents: bytes, filename: str, content_type: str) ->
 
 
 @router.post("/understand")
-async def understand_fir(file: UploadFile = File(...)):
+async def understand_fir(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
     """
     Accepts an uploaded FIR (PDF, TXT, or image).
     Extracts text using PyMuPDF and/or RapidOCR, processes legal analysis via existing AI RAG pipeline,
@@ -920,7 +920,7 @@ class FIRGenerateRequest(BaseModel):
 
 
 @router.post("/generate")
-def generate_fir(body: FIRGenerateRequest = None):
+def generate_fir(body: FIRGenerateRequest = None, current_user: User = Depends(get_current_user)):
     """
     Generates a formal First Information Report (FIR) draft as a PDF.
     Returns official FIR ID (UUID4-based), SHA-256 hash, and download URL.
@@ -1012,8 +1012,23 @@ def generate_fir(body: FIRGenerateRequest = None):
 from fastapi.responses import StreamingResponse
 
 @router.get("/download/{file_id}")
-def download_fir(file_id: str):
-    """Download a stored FIR PDF from MongoDB/GridFS."""
+def download_fir(
+    file_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Download a stored FIR PDF from MongoDB/GridFS.
+
+    Documents attached to a citizen's saved FIR are only available to that
+    citizen; all other stored FIR documents are restricted to police users.
+    """
+    owner_record = db.query(SavedFIR).filter(SavedFIR.gridfs_file_id == file_id).first()
+    if owner_record is not None:
+        if owner_record.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="File not found or invalid file ID.")
+    elif current_user.role != "police":
+        raise HTTPException(status_code=403, detail="You don't have permission to access this resource")
+
     from app.core.mongo import mongo_available, fs as _mongo_fs
     if not mongo_available or _mongo_fs is None:
         raise HTTPException(
@@ -1033,7 +1048,7 @@ def download_fir(file_id: str):
 
 
 @router.get("/{fir_id}")
-def get_fir(fir_id: str, db: Session = Depends(get_db)):
+def get_fir(fir_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_role("police"))):
     from app.models.fir_registry import FIRRegistry
     record = db.query(FIRRegistry).filter(FIRRegistry.fir_id == fir_id).first()
     if not record:
@@ -1060,7 +1075,7 @@ class DuplicateCheckRequest(BaseModel):
 
 
 @router.post("/check-duplicate")
-def check_duplicate_route(body: DuplicateCheckRequest, db: Session = Depends(get_db)):
+def check_duplicate_route(body: DuplicateCheckRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Checks whether a complaint is likely a duplicate of an existing FIR.
     Accepts a JSON body { complaint_text } (not a query parameter).

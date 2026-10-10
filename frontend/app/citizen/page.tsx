@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import Navbar from '@/components/Navbar'
 import { getStoredUser } from '@/lib/auth'
+import { apiFetch } from '@/lib/api'
 
 export default function CitizenDashboard() {
   const [user, setUser] =
@@ -131,8 +132,9 @@ export default function CitizenDashboard() {
 
                 </Link>
               ))}
-
             </div>
+
+            <ComplaintsHistory />
           </section>
 
           {/* How LawAid Helps */}
@@ -336,3 +338,53 @@ function ScaleIcon() {
   )
 }
 
+function ComplaintsHistory() {
+  const [complaints, setComplaints] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    async function loadComplaints() {
+      try {
+        const res = await apiFetch("/api/complaints/my")
+        if (res.ok) {
+          const data = await res.json()
+          setComplaints(data)
+        }
+      } catch (e) {
+        console.error("Failed to load complaints", e)
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadComplaints()
+  }, [])
+
+  if (loading) return null
+
+  if (complaints.length === 0) return null
+
+  return (
+    <div className="mt-12">
+      <h3 className="font-serif text-[24px] font-semibold text-[#12335B] mb-6 border-b border-[#cbd5e1] pb-2">Your Past Complaints</h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {complaints.map(c => (
+          <div key={c.id} className="bg-white/80 border border-gray-200 p-5 rounded-xl shadow-sm hover:shadow-md transition">
+            <div className="flex justify-between items-start mb-2">
+              <h4 className="font-bold text-[#12335B]">Complaint #{c.id}</h4>
+              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full">{c.status}</span>
+            </div>
+            <p className="text-sm text-gray-700 line-clamp-3 mb-3">{c.complaint_text}</p>
+            {c.detected_sections?.length > 0 && (
+              <div className="flex flex-wrap gap-1 mb-3">
+                {c.detected_sections.map((s: string) => (
+                   <span key={s} className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-200">{s}</span>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-gray-400">Filed: {new Date(c.created_at).toLocaleString()}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
