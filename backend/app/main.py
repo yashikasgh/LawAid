@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.core.database import get_db
 from app.core.config import settings
-from app.routers import auth, fir, police, chat, complaints, fir_drafts
+from app.routers import auth, fir, police, chat, complaints, fir_drafts, lawyer_documents
 from app.middleware.audit_log import audit_log_middleware
 
 app = FastAPI(title="LawAid Backend", version="1.0.0")
@@ -40,7 +40,7 @@ async def csrf_origin_check(request: Request, call_next):
 from fastapi import APIRouter
 api_router = APIRouter(prefix="/api")
 
-for _r in [auth.router, fir_drafts.router, fir.router, police.router, chat.router, complaints.router]:
+for _r in [auth.router, fir_drafts.router, fir.router, police.router, chat.router, complaints.router, lawyer_documents.router]:
     api_router.include_router(_r)
     app.include_router(_r)
 

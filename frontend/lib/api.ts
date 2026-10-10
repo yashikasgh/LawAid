@@ -121,6 +121,27 @@ export const chatAPI = {
     api.get(`/chat/history/${sessionId}`),
 }
 
+// ── Lawyer case documents ───────────────────────────────────
+export const lawyerDocumentsAPI = {
+  workspace: () => api.post('/lawyer/cases/workspace'),
+  list: (caseId: string) => api.get(`/lawyer/cases/${caseId}/documents`),
+  upload: (caseId: string, files: File[], onProgress?: (percent: number) => void) => {
+    const form = new FormData()
+    files.forEach((file) => form.append('files', file))
+    return api.post(`/lawyer/cases/${caseId}/documents`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (event) => {
+        if (event.total && onProgress) onProgress(Math.round((event.loaded / event.total) * 100))
+      },
+    })
+  },
+  remove: (caseId: string, documentId: string) =>
+    api.delete(`/lawyer/cases/${caseId}/documents/${documentId}`),
+  retry: (caseId: string, documentId: string) =>
+    api.post(`/lawyer/cases/${caseId}/documents/${documentId}/retry`),
+  analyze: (caseId: string) => api.post(`/lawyer/cases/${caseId}/documents/analyze`),
+}
+
 // ── Police ───────────────────────────────────────────────────
 export const policeAPI = {
   transcribe: (audio: File) => {

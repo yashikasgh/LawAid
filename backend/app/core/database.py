@@ -36,6 +36,8 @@ def _init_engine():
             from app.models.chat import ChatSessionModel # noqa: F401
             from app.models.saved_fir import SavedFIR # noqa: F401
             from app.models.fir_draft import FIRDraft # noqa: F401
+            from app.models.lawyer_case import LawyerCase # noqa: F401
+            from app.models.case_document import CaseDocument # noqa: F401
             Base.metadata.create_all(bind=sqlite_engine)
         except Exception:
             pass

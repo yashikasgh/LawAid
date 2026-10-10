@@ -25,6 +25,8 @@ from app.models.session import Session
 from app.models.fir_registry import FIRRegistry
 from app.models.complaint import Complaint
 from app.models.password_reset import PasswordReset
+from app.models.lawyer_case import LawyerCase
+from app.models.case_document import CaseDocument
 
 target_metadata = Base.metadata
 
