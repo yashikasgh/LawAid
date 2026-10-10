@@ -125,6 +125,7 @@ export const chatAPI = {
 export const lawyerDocumentsAPI = {
   workspace: () => api.post('/lawyer/cases/workspace'),
   list: (caseId: string) => api.get(`/lawyer/cases/${caseId}/documents`),
+  metrics: (caseId: string) => api.get(`/lawyer/cases/${caseId}/documents/metrics`),
   upload: (caseId: string, files: File[], onProgress?: (percent: number) => void) => {
     const form = new FormData()
     files.forEach((file) => form.append('files', file))
@@ -140,6 +141,26 @@ export const lawyerDocumentsAPI = {
   retry: (caseId: string, documentId: string) =>
     api.post(`/lawyer/cases/${caseId}/documents/${documentId}/retry`),
   analyze: (caseId: string) => api.post(`/lawyer/cases/${caseId}/documents/analyze`),
+}
+
+// ── Lawyer case workflow ───────────────────────────────────
+// Keep Lawyer-module request details here so the temporary testing screens can
+// be replaced later without copying API knowledge into presentation components.
+export const lawyerCaseAPI = {
+  get: (caseId: string) => api.get(`/lawyer/cases/${caseId}`),
+  analyze: (caseId: string) => api.post(`/lawyer/cases/${caseId}/analyze`),
+  getAnalysis: (caseId: string) => api.get(`/lawyer/cases/${caseId}/analysis`),
+  saveAnalysis: (caseId: string, payload: unknown) =>
+    api.patch(`/lawyer/cases/${caseId}/analysis`, { payload }),
+  getTimeline: (caseId: string, params?: { event_type?: string; source_document_id?: string; date_from?: string; date_to?: string; order?: 'oldest' | 'newest' }) =>
+    api.get(`/lawyer/cases/${caseId}/timeline`, { params }),
+  updateTimeline: (caseId: string, eventId: string, payload: unknown) =>
+    api.patch(`/lawyer/cases/${caseId}/timeline/${eventId}`, payload),
+  getSummary: (caseId: string) => api.get(`/lawyer/cases/${caseId}/summary`),
+  saveSummary: (caseId: string, payload: { executive_summary: string; current_stage?: string | null }) =>
+    api.patch(`/lawyer/cases/${caseId}/summary`, payload),
+  export: (caseId: string, options: Record<string, boolean>) =>
+    api.post(`/lawyer/cases/${caseId}/export`, options, { responseType: 'blob' }),
 }
 
 // ── Police ───────────────────────────────────────────────────

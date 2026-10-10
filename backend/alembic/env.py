@@ -27,6 +27,7 @@ from app.models.complaint import Complaint
 from app.models.password_reset import PasswordReset
 from app.models.lawyer_case import LawyerCase
 from app.models.case_document import CaseDocument
+from app.models.lawyer_workflow import CaseAnalysis, CaseTimelineEvent, CaseSummary
 
 target_metadata = Base.metadata
 

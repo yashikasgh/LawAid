@@ -2,6 +2,7 @@
 
 import Navbar from '@/components/Navbar'
 import { lawyerDocumentsAPI } from '@/lib/api'
+import LawyerTestHeader from '@/components/LawyerTestHeader'
 import {
   AlertCircle,
   CheckCircle2,
@@ -29,6 +30,7 @@ type CaseDocument = {
   status: DocumentStatus
   progress: number
   pages?: number | null
+  extracted_text_available?: boolean
   extracted_entities: string[]
   error?: string | null
   file?: File
@@ -66,10 +68,15 @@ export default function LawyerDocumentsPage() {
   const [analyzing, setAnalyzing] = useState(false)
   const [message, setMessage] = useState('')
   const [showFormats, setShowFormats] = useState(false)
+  const [metrics, setMetrics] = useState<{ documents: number; pages: number; extracted_entities: number } | null>(null)
 
   const refreshDocuments = useCallback(async (id: string) => {
-    const response = await lawyerDocumentsAPI.list(id)
+    const [response, metricResponse] = await Promise.all([
+      lawyerDocumentsAPI.list(id),
+      lawyerDocumentsAPI.metrics(id),
+    ])
     setDocuments(response.data)
+    setMetrics(metricResponse.data)
   }, [])
 
   useEffect(() => {
@@ -142,6 +149,7 @@ export default function LawyerDocumentsPage() {
         ...uploaded,
       ])
       if (uploaded.some((document) => document.status === 'failed')) setMessage('One or more documents could not be parsed. Use Retry after checking the file.')
+      await refreshDocuments(caseId)
     } catch (error: any) {
       const detail = error?.response?.data?.detail || 'Upload failed. Please retry.'
       setMessage(detail)
@@ -161,6 +169,7 @@ export default function LawyerDocumentsPage() {
     try {
       await lawyerDocumentsAPI.remove(caseId, document.id)
       setDocuments((current) => current.filter((item) => item.id !== document.id))
+      await refreshDocuments(caseId)
     } catch (error: any) {
       setMessage(error?.response?.data?.detail || 'Could not remove this document.')
     }
@@ -172,6 +181,7 @@ export default function LawyerDocumentsPage() {
     try {
       const response = await lawyerDocumentsAPI.retry(caseId, document.id)
       setDocuments((current) => current.map((item) => item.id === document.id ? response.data : item))
+      await refreshDocuments(caseId)
     } catch (error: any) {
       setMessage(error?.response?.data?.detail || 'Could not retry parsing this document.')
       await refreshDocuments(caseId)
@@ -192,10 +202,10 @@ export default function LawyerDocumentsPage() {
   }
 
   const overview = useMemo(() => ({
-    files: documents.filter((document) => !document.id.startsWith('local-')).length,
-    pages: documents.reduce((total, document) => total + (document.pages || 0), 0),
-    entities: documents.reduce((total, document) => total + document.extracted_entities.length, 0),
-  }), [documents])
+    files: metrics?.documents ?? documents.filter((document) => !document.id.startsWith('local-')).length,
+    pages: metrics?.pages ?? documents.reduce((total, document) => total + (document.pages || 0), 0),
+    entities: metrics?.extracted_entities ?? documents.reduce((total, document) => total + document.extracted_entities.length, 0),
+  }), [documents, metrics])
   const allParsed = documents.length > 0 && documents.every((document) => document.status === 'parsed')
 
   return (
@@ -205,10 +215,10 @@ export default function LawyerDocumentsPage() {
         <div className="fixed inset-0 -z-10"><img src="/images/lawaid-citizen-dashboard.png" alt="" className="h-full w-full object-cover object-center" /></div>
         <div className="fixed inset-0 -z-10 bg-[#f7f4ec]/65" />
         <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+          <LawyerTestHeader title="Case Documents" caseId={caseId} />
           <header className="mb-8 text-center">
             <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[#98701f]">Lawyer Portal</p>
-            <h1 className="mt-3 font-serif text-4xl font-semibold tracking-tight text-[#0f305b] md:text-5xl">Case Documents</h1>
-            <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-[#36516e] md:text-base">Upload case documents and review the text extracted locally before the next case workflow step.</p>
+            <p className="mx-auto max-w-2xl text-sm leading-6 text-[#36516e] md:text-base">Upload case documents and review the text extracted locally before the next case workflow step.</p>
           </header>
           {message && <div role="alert" className="mb-5 flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50/95 p-4 text-sm text-amber-900"><AlertCircle className="mt-0.5 shrink-0" size={18} /><span>{message}</span></div>}
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1.55fr)_minmax(290px,0.85fr)]">
@@ -220,14 +230,14 @@ export default function LawyerDocumentsPage() {
                 <div className="mt-6 flex flex-wrap justify-center gap-3"><button type="button" onClick={open} className="inline-flex items-center gap-2 rounded-xl bg-[#0f305b] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[#173f70]"><FileUp size={17} />Browse Files</button><button type="button" onClick={() => setShowFormats(true)} className="rounded-xl border border-[#cdbd97] px-5 py-3 text-sm font-semibold text-[#36516e] hover:bg-white">Supported Formats</button></div>
               </div>
               <div className="mt-8 flex items-center justify-between gap-3"><h3 className="font-serif text-xl font-semibold text-[#0f305b]">Selected Documents</h3><span className="rounded-full bg-[#f3efe4] px-3 py-1 text-xs font-semibold text-[#6d5a32]">{documents.length} {documents.length === 1 ? 'file' : 'files'}</span></div>
-              {loading ? <div className="mt-5 flex justify-center py-12 text-[#36516e]"><LoaderCircle className="animate-spin" /></div> : documents.length === 0 ? <div className="mt-4 rounded-xl border border-dashed border-[#d9d3c6] px-4 py-10 text-center"><FileText className="mx-auto text-[#b0a58e]" size={30} /><p className="mt-3 text-sm text-[#64748b]">Select files to add them to this case workspace.</p></div> : <ul className="mt-4 space-y-3">{documents.map((document) => <li key={document.id} className="rounded-xl border border-[#e6e0d4] bg-white/90 p-4"><div className="flex gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#f4f0e6] text-[#0f305b]"><FileText size={20} /></div><div className="min-w-0 flex-1"><p className="break-all text-sm font-semibold text-[#183b62]">{document.name}</p><p className="mt-1 text-xs text-[#718096]">{formatSize(document.size_bytes)} · {document.type.toUpperCase()} {document.uploaded_at ? `· ${new Date(document.uploaded_at).toLocaleString()}` : ''}</p><span className={`mt-2 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle[document.status]}`}>{['uploading', 'processing'].includes(document.status) && <LoaderCircle className="animate-spin" size={13} />}{document.status === 'parsed' && <CheckCircle2 size={13} />}{document.status === 'failed' && <AlertCircle size={13} />}{displayStatus(document.status)}</span>{['uploading', 'processing'].includes(document.status) && <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-blue-100"><div className="h-full bg-[#2368c4] transition-all" style={{ width: `${document.progress}%` }} /></div>}{document.error && <p className="mt-2 text-xs text-[#be3737]">{document.error}</p>}</div><div className="flex shrink-0 gap-1">{document.status === 'failed' && !document.id.startsWith('local-') && <button onClick={() => retryDocument(document)} aria-label={`Retry ${document.name}`} className="rounded-lg p-2 text-[#2368c4] hover:bg-blue-50"><RefreshCw size={17} /></button>}<button onClick={() => removeDocument(document)} disabled={uploading} aria-label={`Remove ${document.name}`} className="rounded-lg p-2 text-[#8a6b59] hover:bg-red-50 hover:text-red-700 disabled:opacity-40"><Trash2 size={17} /></button></div></div></li>)}</ul>}
+              {loading ? <div className="mt-5 flex justify-center py-12 text-[#36516e]"><LoaderCircle className="animate-spin" /></div> : documents.length === 0 ? <div className="mt-4 rounded-xl border border-dashed border-[#d9d3c6] px-4 py-10 text-center"><FileText className="mx-auto text-[#b0a58e]" size={30} /><p className="mt-3 text-sm text-[#64748b]">Select files to add them to this case workspace.</p></div> : <ul className="mt-4 space-y-3">{documents.map((document) => <li key={document.id} className="rounded-xl border border-[#e6e0d4] bg-white/90 p-4"><div className="flex gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#f4f0e6] text-[#0f305b]"><FileText size={20} /></div><div className="min-w-0 flex-1"><p className="break-all text-sm font-semibold text-[#183b62]">{document.name}</p><p className="mt-1 text-xs text-[#718096]">{formatSize(document.size_bytes)} · {document.type.toUpperCase()} {document.uploaded_at ? `· ${new Date(document.uploaded_at).toLocaleString()}` : ''}</p><p className="mt-1 text-xs text-[#64748b]">Extracted text: {document.extracted_text_available ? 'available' : 'not available'}</p><span className={`mt-2 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle[document.status]}`}>{['uploading', 'processing'].includes(document.status) && <LoaderCircle className="animate-spin" size={13} />}{document.status === 'parsed' && <CheckCircle2 size={13} />}{document.status === 'failed' && <AlertCircle size={13} />}{displayStatus(document.status)}</span>{['uploading', 'processing'].includes(document.status) && <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-blue-100"><div className="h-full bg-[#2368c4] transition-all" style={{ width: `${document.progress}%` }} /></div>}{document.error && <p className="mt-2 text-xs text-[#be3737]">{document.error}</p>}</div><div className="flex shrink-0 gap-1">{document.status === 'failed' && !document.id.startsWith('local-') && <button onClick={() => retryDocument(document)} aria-label={`Retry ${document.name}`} className="rounded-lg p-2 text-[#2368c4] hover:bg-blue-50"><RefreshCw size={17} /></button>}<button onClick={() => removeDocument(document)} disabled={uploading} aria-label={`Remove ${document.name}`} className="rounded-lg p-2 text-[#8a6b59] hover:bg-red-50 hover:text-red-700 disabled:opacity-40"><Trash2 size={17} /></button></div></div></li>)}</ul>}
               <div className="mt-7 flex justify-end"><button onClick={uploadSelected} disabled={uploading || !caseId || !documents.some((document) => document.status === 'waiting')} className="inline-flex items-center gap-2 rounded-xl bg-[#0f305b] px-6 py-3 text-sm font-bold text-white transition hover:bg-[#173f70] disabled:cursor-not-allowed disabled:bg-slate-300">{uploading && <LoaderCircle className="animate-spin" size={17} />}{uploading ? 'Uploading Documents…' : 'Upload Selected Documents'}</button></div>
             </section>
             <aside className="space-y-6">
-              <section className="rounded-2xl border border-white/80 bg-white/90 p-6 shadow-[0_15px_40px_rgba(18,51,91,0.10)]"><h2 className="font-serif text-2xl font-semibold text-[#0f305b]">Document Overview</h2><dl className="mt-5 grid grid-cols-3 gap-3 text-center"><div className="rounded-xl bg-[#f7f4ec] p-3"><dt className="text-xs text-[#64748b]">Documents</dt><dd className="mt-1 text-2xl font-bold text-[#0f305b]">{overview.files}</dd></div><div className="rounded-xl bg-[#f7f4ec] p-3"><dt className="text-xs text-[#64748b]">Pages</dt><dd className="mt-1 text-2xl font-bold text-[#0f305b]">{overview.pages}</dd></div><div className="rounded-xl bg-[#f7f4ec] p-3"><dt className="text-xs text-[#64748b]">Entities</dt><dd className="mt-1 text-2xl font-bold text-[#0f305b]">{overview.entities}</dd></div></dl><p className="mt-4 text-xs leading-5 text-[#64748b]">DOCX page counts are unavailable until rendered; entities only appear when local extraction finds them.</p></section>
+              <section className="rounded-2xl border border-white/80 bg-white/90 p-6 shadow-[0_15px_40px_rgba(18,51,91,0.10)]"><div className="flex items-center justify-between"><h2 className="font-serif text-2xl font-semibold text-[#0f305b]">Document Overview</h2><button onClick={() => caseId && refreshDocuments(caseId)} className="rounded-lg p-2 text-[#0f305b] hover:bg-[#f7f4ec]" aria-label="Refresh documents"><RefreshCw size={18} /></button></div><dl className="mt-5 grid grid-cols-3 gap-3 text-center"><div className="rounded-xl bg-[#f7f4ec] p-3"><dt className="text-xs text-[#64748b]">Documents</dt><dd className="mt-1 text-2xl font-bold text-[#0f305b]">{overview.files}</dd></div><div className="rounded-xl bg-[#f7f4ec] p-3"><dt className="text-xs text-[#64748b]">Pages</dt><dd className="mt-1 text-2xl font-bold text-[#0f305b]">{overview.pages}</dd></div><div className="rounded-xl bg-[#f7f4ec] p-3"><dt className="text-xs text-[#64748b]">Entities</dt><dd className="mt-1 text-2xl font-bold text-[#0f305b]">{overview.entities}</dd></div></dl><p className="mt-4 text-xs leading-5 text-[#64748b]">DOCX page counts are unavailable until rendered; entities only appear when local extraction finds them.</p></section>
               <section className="rounded-2xl border border-white/80 bg-white/90 p-6 shadow-[0_15px_40px_rgba(18,51,91,0.10)]"><h2 className="font-serif text-2xl font-semibold text-[#0f305b]">Processing Queue</h2><div className="mt-4 space-y-3">{documents.filter((document) => !document.id.startsWith('local-')).length === 0 ? <p className="text-sm text-[#64748b]">No uploaded documents yet.</p> : documents.filter((document) => !document.id.startsWith('local-')).map((document) => <div key={document.id} className="flex items-center justify-between gap-3 border-b border-[#eee8dd] pb-3 last:border-0"><span className="truncate text-sm font-medium text-[#36516e]">{document.name}</span><span className={`shrink-0 text-xs font-semibold ${statusStyle[document.status].split(' ')[1]}`}>{displayStatus(document.status)}</span></div>)}</div></section>
               <button onClick={analyzeDocuments} disabled={!allParsed || analyzing} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#c28b19] px-6 py-4 text-sm font-bold text-white shadow-sm transition hover:bg-[#a97512] disabled:cursor-not-allowed disabled:bg-[#d7d0c0] disabled:text-[#777267]">{analyzing && <LoaderCircle className="animate-spin" size={18} />}{analyzing ? 'Checking Documents…' : 'Analyze Case Documents'}</button>
-              <p className="text-center text-xs leading-5 text-[#64748b]">Analysis is not implemented in this task. The button verifies that all uploaded documents are parsed and then clearly reports that limitation.</p>
+              <p className="text-center text-xs leading-5 text-[#64748b]">Analysis uses parsed text from this case workspace. Review results on the AI Analysis page.</p>
             </aside>
           </div>
           <div className="mt-7"><Link href="/lawyer" className="text-sm font-semibold text-[#315b82] hover:text-[#c28b19]">← Back to Lawyer Dashboard</Link></div>

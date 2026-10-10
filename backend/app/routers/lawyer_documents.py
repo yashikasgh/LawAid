@@ -127,6 +127,29 @@ def list_documents(
     return [_serialize(document) for document in documents]
 
 
+@router.get("/cases/{case_id}/documents/metrics")
+def document_metrics(
+    case_id: str,
+    current_user: User = Depends(require_role("lawyer")),
+    db: Session = Depends(get_db),
+):
+    """Return document overview figures calculated from persisted records."""
+    _case_for_lawyer(case_id, current_user, db)
+    documents = db.query(CaseDocument).filter(CaseDocument.case_id == case_id).all()
+    entity_count = 0
+    for document in documents:
+        try:
+            entity_count += len(json.loads(document.extracted_entities or "[]"))
+        except json.JSONDecodeError:
+            continue
+    return {
+        "documents": len(documents),
+        "pages": sum(document.page_count or 0 for document in documents),
+        "extracted_entities": entity_count,
+        "by_status": {state: sum(document.status == state for document in documents) for state in ("waiting", "uploading", "processing", "parsed", "failed")},
+    }
+
+
 @router.post("/cases/{case_id}/documents", status_code=status.HTTP_201_CREATED)
 async def upload_documents(
     case_id: str,
@@ -287,7 +310,7 @@ def begin_analysis(
     db: Session = Depends(get_db),
 ):
     _case_for_lawyer(case_id, current_user, db)
-    documents = db.query(CaseDocument).filter(CaseDocument.case_id == case_id).all()
-    if not documents or any(document.status != "parsed" for document in documents):
-        raise HTTPException(status_code=409, detail="All selected documents must finish parsing before analysis can start.")
-    raise HTTPException(status_code=501, detail="Case analysis is not implemented yet. Your parsed documents remain available in this case workspace.")
+    # Compatibility route retained for earlier frontend clients.  Delegate to
+    # the canonical case-analysis endpoint rather than reporting a stale 501.
+    from app.routers.lawyer_workflow import analyze
+    return analyze(case_id=case_id, current_user=current_user, db=db)

@@ -38,6 +38,7 @@ def _init_engine():
             from app.models.fir_draft import FIRDraft # noqa: F401
             from app.models.lawyer_case import LawyerCase # noqa: F401
             from app.models.case_document import CaseDocument # noqa: F401
+            from app.models.lawyer_workflow import CaseAnalysis, CaseTimelineEvent, CaseSummary # noqa: F401
             Base.metadata.create_all(bind=sqlite_engine)
         except Exception:
             pass
