@@ -23,6 +23,7 @@ class CaseDocument(Base):
     extracted_text = Column(Text, nullable=True)
     extracted_entities = Column(Text, nullable=True)
     extraction_details = Column(Text, nullable=True)
+    structured_extraction = Column(Text, nullable=True)
     error_message = Column(String(500), nullable=True)
     ocr_used = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

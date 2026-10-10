@@ -3,9 +3,12 @@
 This intentionally extracts only text present in uploaded documents.  It is a
 review aid, not a finding of fact or legal conclusion.
 """
+import json
 import re
 from collections import defaultdict
 from datetime import datetime
+
+from app.services.fir_extractor import extract_fir_fields
 
 
 DATE_RE = re.compile(r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})\b", re.I)
@@ -39,6 +42,26 @@ def _normalized_date(value: str) -> str:
     return value
 
 
+def _structured_extraction(document, text: str) -> dict:
+    """Use persisted FIR extraction when available, without making analysis depend on it."""
+    try:
+        saved = json.loads(document.structured_extraction or "")
+        if isinstance(saved, dict):
+            return saved
+    except (TypeError, json.JSONDecodeError):
+        pass
+    return extract_fir_fields(text)
+
+
+def _structured_source(document, value: dict | None) -> dict:
+    return {
+        "document_id": document.id,
+        "document_name": document.original_filename,
+        "page": (value or {}).get("source", {}).get("page"),
+        "excerpt": (value or {}).get("source", {}).get("snippet", ""),
+    }
+
+
 def extract_case_information(documents):
     parties, locations, evidence, financial, facts, sections, timeline = [], [], [], [], [], [], []
     seen = defaultdict(set)
@@ -47,55 +70,28 @@ def extract_case_information(documents):
         if not text.strip():
             continue
             
-        # -- RULE BASED FIR EXTRACTION --
-        is_fir = "FIRST INFORMATION REPORT" in text.upper() or "प्रथम सूचना रिपोर्ट" in text
-        if is_fir:
-            # Complainant
-            m_comp = re.search(r'\(a\)\s?Name\(.*?\):\s*([^\n]+)', text, re.I)
-            if m_comp:
-                val = m_comp.group(1).strip()
-                if val.lower() not in seen["complainant"]:
-                    seen["complainant"].add(val.lower())
-                    parties.append({"role": "complainant", "name": val, "source": _source(document, m_comp), "confidence": "explicit_in_document"})
-            
-            # Location
-            m_loc = re.search(r'\(b\)\s?Address\(.*?\):\s*([^\n]+)', text, re.I)
-            if m_loc:
-                val = m_loc.group(1).strip()
-                if val.lower() not in seen["location"]:
-                    seen["location"].add(val.lower())
-                    locations.append({"text": val, "source": _source(document, m_loc), "confidence": "explicit_in_document"})
-            
-            # Incident Date and Time
-            m_date = re.search(r'Date From\(.*?\):\s*([0-9/]+)', text, re.I)
-            m_time = re.search(r'Time From\s*\(.*?\):\s*(.+?hrs)', text, re.I)
-            if m_date:
-                date_val = _normalized_date(m_date.group(1).strip())
-                time_val = m_time.group(1).strip() if m_time else None
-                timeline.append({
-                    "date": date_val, 
-                    "time": time_val, 
-                    "title": "Incident Occurred (FIR)", 
-                    "description": "Date and time of the incident as officially recorded in the FIR.", 
-                    "event_type": "Incident", 
-                    "source_document_id": document.id, 
-                    "source_document_name": document.original_filename, 
-                    "source_reference": _source(document, m_date), 
-                    "confidence": "explicit_in_document"
-                })
-
-            # FIR Content / Key Facts
-            m_content = re.search(r'12\.F\.I\.R\.\s*Contents.*?\n(.*?)(?=\n13\.Action Taken|\Z)', text, re.DOTALL | re.I)
-            if m_content:
-                content_val = m_content.group(1).strip()
-                if content_val and content_val.lower() not in seen["fact"]:
-                    seen["fact"].add(content_val.lower())
-                    facts.append({
-                        "text": content_val[:1500] + ("..." if len(content_val) > 1500 else ""), 
-                        "source": {"document_id": document.id, "document_name": document.original_filename, "excerpt": content_val[:1000]}, 
-                        "confidence": "explicit_in_document"
-                    })
-        # -- END RULE BASED FIR EXTRACTION --
+        structured = _structured_extraction(document, text)
+        fields = structured.get("rule_fields", {})
+        complainant = fields.get("complainant")
+        if complainant and complainant.get("value") and complainant["value"].lower() not in seen["complainant"]:
+            seen["complainant"].add(complainant["value"].lower())
+            parties.append({"role": "complainant", "name": complainant["value"], "source": _structured_source(document, complainant), "confidence": "explicit_in_document"})
+        location = fields.get("occurrence_place")
+        if location and location.get("value") and location["value"].lower() not in seen["location"]:
+            seen["location"].add(location["value"].lower())
+            locations.append({"text": location["value"], "source": _structured_source(document, location), "confidence": "explicit_in_document"})
+        for section in structured.get("explicit_sections", []):
+            number = section.get("section")
+            if number and number not in seen["section"]:
+                seen["section"].add(number)
+                sections.append({"section_number": number, "title": section.get("act"), "confidence": "explicit_in_document", "source": _structured_source(document, section)})
+        narrative = structured.get("incident_narrative", {})
+        if narrative.get("value") and narrative["value"].lower() not in seen["fact"]:
+            seen["fact"].add(narrative["value"].lower())
+            facts.append({"text": narrative["value"][:1500], "source": _structured_source(document, narrative), "confidence": "explicit_in_document"})
+        occurrence = fields.get("occurrence_date")
+        if occurrence and occurrence.get("normalized_date"):
+            timeline.append({"date": occurrence["normalized_date"], "time": None, "title": "Incident date recorded in FIR", "description": "Occurrence date explicitly labelled in the uploaded FIR.", "event_type": "Incident", "source_document_id": document.id, "source_document_name": document.original_filename, "source_reference": _structured_source(document, occurrence), "confidence": "explicit_in_document"})
 
         for role, labels in (("complainant", ["complainant", "informant"]), ("accused", ["accused", "respondent", "suspect"])):
             value, match = _labelled(text, labels)
@@ -113,10 +109,13 @@ def extract_case_information(documents):
             if raw not in seen["money"]:
                 seen["money"].add(raw); financial.append({"label": "Amount mentioned in document", "raw_text": raw, "source": _source(document, match), "confidence": "needs_review"})
         for match in DATE_RE.finditer(text):
-            title = "Date mentioned in document"
             nearby = text[max(0, match.start()-100):match.end()+160]
-            kind = "Incident" if re.search(r"incident|occurred|happened|assault|theft|complaint", nearby, re.I) else "Investigation"
-            timeline.append({"date": _normalized_date(match.group(0)), "time": (TIME_RE.search(nearby).group(0) if TIME_RE.search(nearby) else None), "title": title, "description": nearby.strip(), "event_type": kind, "source_document_id": document.id, "source_document_name": document.original_filename, "source_reference": _source(document, match), "confidence": "needs_review"})
+            if not re.search(r"incident|occurred|happened|assault|theft|complaint", nearby, re.I):
+                continue
+            normalized_date = _normalized_date(match.group(0))
+            if any(event["date"] == normalized_date and event["source_document_id"] == document.id for event in timeline):
+                continue
+            timeline.append({"date": normalized_date, "time": (TIME_RE.search(nearby).group(0) if TIME_RE.search(nearby) else None), "title": "Incident date mentioned in document", "description": nearby.strip(), "event_type": "Incident", "source_document_id": document.id, "source_document_name": document.original_filename, "source_reference": _source(document, match), "confidence": "needs_review"})
         for line in (line.strip() for line in text.splitlines()):
             if line and re.search(r"evidence|seized|photograph|video|medical|weapon|receipt", line, re.I) and line.lower() not in seen["evidence"]:
                 seen["evidence"].add(line.lower()); evidence.append({"name": line[:500], "source_document_id": document.id, "source_document_name": document.original_filename, "confidence": "needs_review"})
@@ -124,29 +123,5 @@ def extract_case_information(documents):
             if len(line) >= 30 and re.search(r"incident|accused|complainant|witness|stolen|assault|fraud", line, re.I):
                 if line.lower() not in seen["fact"]:
                     seen["fact"].add(line.lower()); facts.append({"text": line[:1000], "source": {"document_id": document.id, "document_name": document.original_filename, "excerpt": line[:1000]}, "confidence": "needs_review"})
-    combined_text = "\n".join(d.extracted_text or "" for d in documents).strip()
-    if combined_text:
-        try:
-            import sys
-            from pathlib import Path
-            project_root = str(Path(__file__).resolve().parents[3])
-            if project_root not in sys.path:
-                sys.path.insert(0, project_root)
-            from ai.rag.pipeline import run_pipeline
-            
-            rag_res = run_pipeline(combined_text[:3000], skip_llm_analysis=True)
-            for item in rag_res.get("analysis", []):
-                sec_num = item.get("section")
-                if sec_num and sec_num not in seen["section"]:
-                    seen["section"].add(sec_num)
-                    sections.append({
-                        "section_number": sec_num,
-                        "title": item.get("title", ""),
-                        "confidence": "suggested_by_pipeline",
-                        "source": {"document_id": None, "document_name": "AI Legal Pipeline", "excerpt": item.get("offence_type", "")}
-                    })
-        except Exception:
-            pass
-
     return {"parties": parties, "locations": locations, "bns_sections": sections, "evidence": evidence, "financial_details": financial, "key_facts": facts, "timeline_candidates": timeline, "offence_type": None,
             "limitations": ["All extracted values require lawyer review. Fields not supported by uploaded text are left blank."]}

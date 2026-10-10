@@ -50,7 +50,7 @@ def _pdf_page_ocr(page: fitz.Page) -> str:
     return _ocr_image_bytes(image)
 
 
-def _extract_pdf(content: bytes) -> tuple[str, int, bool, list[dict]]:
+def _extract_pdf(content: bytes) -> tuple[str, int, bool, list[dict], list[dict]]:
     try:
         pdf = fitz.open(stream=content, filetype="pdf")
     except (fitz.FileDataError, RuntimeError) as error:
@@ -59,6 +59,7 @@ def _extract_pdf(content: bytes) -> tuple[str, int, bool, list[dict]]:
         if pdf.needs_pass:
             raise RuntimeError("Encrypted PDFs are not supported. Upload an unlocked copy.")
         pages: list[dict] = []
+        page_texts: list[dict] = []
         chunks: list[str] = []
         used_ocr = False
         for number, page in enumerate(pdf, start=1):
@@ -68,6 +69,7 @@ def _extract_pdf(content: bytes) -> tuple[str, int, bool, list[dict]]:
             if _usable_text(native) and (not has_images or len(native) > 1000):
                 chunks.append(native)
                 pages.append({"page": number, "method": "native", "status": "parsed", "characters": len(native)})
+                page_texts.append({"page": number, "method": "native", "text": native})
                 continue
                 
             ocr_text = _pdf_page_ocr(page)
@@ -76,13 +78,15 @@ def _extract_pdf(content: bytes) -> tuple[str, int, bool, list[dict]]:
                 chunks.append(ocr_text)
                 used_ocr = True
                 pages.append({"page": number, "method": "ocr", "status": "parsed", "characters": len(ocr_text)})
+                page_texts.append({"page": number, "method": "ocr", "text": ocr_text})
             elif _usable_text(native):
                 chunks.append(native)
                 pages.append({"page": number, "method": "native", "status": "parsed", "characters": len(native)})
+                page_texts.append({"page": number, "method": "native", "text": native})
             else:
                 raise RuntimeError(f"Page {number} has no usable native text and OCR could not read it")
                 
-        return "\n\n".join(chunks), len(pdf), used_ocr, pages
+        return "\n\n".join(chunks), len(pdf), used_ocr, pages, page_texts
 
 
 def _extract_entities(text: str) -> list[str]:
@@ -94,7 +98,7 @@ def parse_case_document(content: bytes, file_type: str) -> dict:
     """Extract text without claiming success when pages cannot actually be read."""
     normalized_type = file_type.lower()
     if normalized_type == "pdf":
-        text, page_count, ocr_used, extraction_details = _extract_pdf(content)
+        text, page_count, ocr_used, extraction_details, page_texts = _extract_pdf(content)
     elif normalized_type == "docx":
         document = WordDocument(io.BytesIO(content))
         text = "\n".join(paragraph.text for paragraph in document.paragraphs).strip()
@@ -102,13 +106,16 @@ def parse_case_document(content: bytes, file_type: str) -> dict:
             raise RuntimeError("DOCX contains no extractable paragraph text")
         page_count, ocr_used = None, False
         extraction_details = [{"page": None, "method": "native", "status": "parsed", "characters": len(text)}]
+        page_texts = [{"page": None, "method": "native", "text": text}]
     elif normalized_type in {"jpg", "jpeg", "png"}:
         text = _ocr_image_bytes(content)
         if not _usable_text(text):
             raise RuntimeError("OCR could not read usable text from the image")
         page_count, ocr_used = 1, True
         extraction_details = [{"page": 1, "method": "ocr", "status": "parsed", "characters": len(text)}]
+        page_texts = [{"page": 1, "method": "ocr", "text": text}]
     else:
         raise ValueError("Unsupported document type")
     return {"text": text, "page_count": page_count, "ocr_used": ocr_used,
-            "extraction_details": extraction_details, "entities": _extract_entities(text)}
+            "extraction_details": extraction_details, "page_texts": page_texts,
+            "entities": _extract_entities(text)}

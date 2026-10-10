@@ -19,6 +19,7 @@ from app.models.lawyer_case import LawyerCase
 from app.models.lawyer_workflow import CaseAnalysis, CaseTimelineEvent
 from app.models.user import User
 from app.services.case_document_parser import parse_case_document
+from app.services.fir_extractor import extract_fir_fields
 
 router = APIRouter(prefix="/lawyer", tags=["lawyer-documents"])
 
@@ -53,6 +54,7 @@ def _serialize(document: CaseDocument) -> dict:
         "error": document.error_message,
         "ocr_used": document.ocr_used,
         "extraction_details": _json_value(document.extraction_details, []),
+        "structured_extraction": _json_value(document.structured_extraction, None),
     }
 
 
@@ -222,6 +224,7 @@ def _process_document_background(document_id: str, data: bytes, file_type: str) 
             document.ocr_used = parsed["ocr_used"]
             document.extracted_entities = json.dumps(parsed["entities"])
             document.extraction_details = json.dumps(parsed["extraction_details"])
+            document.structured_extraction = json.dumps(extract_fir_fields(parsed["text"], parsed["page_texts"]))
             document.status = "parsed"
             document.progress = 100
             document.error_message = None
@@ -316,14 +319,16 @@ def delete_document(
     )
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    _invalidate_document_dependencies(document, db)
     if document.storage_ref:
         _storage_required()
         try:
             fs.delete(ObjectId(document.storage_ref))
         except Exception:
+            # Dependency invalidation is only valid when the file is actually gone.
+            db.rollback()
             raise HTTPException(status_code=503, detail="Document storage is unavailable. Retry deletion later.")
     try:
+        _invalidate_document_dependencies(document, db)
         db.delete(document)
         db.commit()
     except Exception as e:

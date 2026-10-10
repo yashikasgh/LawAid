@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, useMemo } from 'react'
 import LawyerCaseLayout from '@/components/LawyerCaseLayout'
 import { ApiMessage, apiError } from '@/components/LawyerTestState'
 import { lawyerCaseAPI, lawyerDocumentsAPI } from '@/lib/api'
-import { Calendar, CalendarDays, FileText, Filter, SortDesc, Edit3, ChevronDown, Check } from 'lucide-react'
+import { Calendar, CalendarDays, FileText, Filter, Edit3, ChevronDown } from 'lucide-react'
 
 type Event = { id: string; date: string; time?: string | null; title: string; description: string; event_type: string; source_document_name?: string | null; source_document_id?: string | null; is_edited?: boolean }
 const types = ['Incident', 'Police Complaint', 'FIR', 'Medical', 'Witness Statement', 'Investigation', 'Charge Sheet', 'Court Proceedings']
@@ -13,20 +13,16 @@ export default function TimelinePage() {
   const [caseId, setCaseId] = useState<string | null>(null)
   const [events, setEvents] = useState<Event[]>([])
   const [selected, setSelected] = useState<Event | null>(null)
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
-  const [eventType, setEventType] = useState('')
-  const [sourceDoc, setSourceDoc] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [isEditing, setIsEditing] = useState(false)
   const [sortOrder, setSortOrder] = useState('Oldest First')
 
-  const load = useCallback(async (id: string, filters = true) => { 
+  const load = useCallback(async (id: string) => {
     setLoading(true); setError(''); 
     try { 
-      const r = await lawyerCaseAPI.getTimeline(id, filters ? { event_type: eventType || undefined, date_from: dateFrom || undefined, date_to: dateTo || undefined } : undefined); 
+      const r = await lawyerCaseAPI.getTimeline(id);
       let sortedEvents = [...r.data]
       if (sortOrder === 'Oldest First') {
         sortedEvents.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
@@ -38,12 +34,12 @@ export default function TimelinePage() {
     } 
     catch (e) { setError(apiError(e, 'Could not load timeline.')) } 
     finally { setLoading(false) } 
-  }, [dateFrom, dateTo, eventType, sortOrder])
+  }, [sortOrder])
 
   useEffect(() => { 
     lawyerDocumentsAPI.workspace().then((r) => { 
       setCaseId(r.data.id); 
-      return load(r.data.id, false) 
+      return load(r.data.id)
     }).catch((e) => { 
       setError(apiError(e, 'Could not load your case workspace.')); 
       setLoading(false) 
@@ -167,7 +163,7 @@ export default function TimelinePage() {
                   value={sortOrder} 
                   onChange={(e) => {
                     setSortOrder(e.target.value)
-                    load(caseId!, true)
+                    load(caseId!)
                   }}
                   className="font-bold text-[#0f305b] bg-transparent focus:outline-none appearance-none pr-4 cursor-pointer"
                 >
@@ -182,8 +178,8 @@ export default function TimelinePage() {
                 <p className="text-center py-10 text-[#64748b]">Loading timeline…</p>
               ) : events.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-[#d6c9aa] bg-[#fcfaf7] p-10 text-center">
-                  <p className="font-bold text-[#0f305b]">No events match these filters.</p>
-                  <p className="text-sm text-[#64748b] mt-1">Run analysis after documents are parsed or adjust your filters.</p>
+                  <p className="font-bold text-[#0f305b]">No timeline events yet.</p>
+                  <p className="text-sm text-[#64748b] mt-1">Run analysis after documents are parsed.</p>
                 </div>
               ) : (
                 <div className="relative before:absolute before:left-[19px] before:top-4 before:bottom-4 before:w-[2px] before:bg-[#e6e0d4] space-y-6">

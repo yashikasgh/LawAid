@@ -5,7 +5,7 @@ import fitz
 import pytest
 from bson import ObjectId
 from docx import Document as WordDocument
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 from starlette.datastructures import Headers, UploadFile
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -40,6 +40,7 @@ def database(monkeypatch):
     storage = FakeGridFS()
     monkeypatch.setattr(lawyer_documents, "mongo_available", True)
     monkeypatch.setattr(lawyer_documents, "fs", storage)
+    monkeypatch.setattr(lawyer_documents, "SessionLocal", session_factory)
     try:
         yield session_factory(), storage
     finally:
@@ -73,11 +74,23 @@ def workspace(db, lawyer: User) -> str:
     return response["id"]
 
 
+async def upload_and_process(case_id, files, lawyer, db):
+    """Execute FastAPI's queued parser task in this direct router test."""
+    tasks = BackgroundTasks()
+    created = await lawyer_documents.upload_documents(
+        case_id, files, tasks, lawyer, db
+    )
+    for task in tasks.tasks:
+        task.func(*task.args, **task.kwargs)
+    db.expire_all()
+    return lawyer_documents.list_documents(case_id, lawyer, db)
+
+
 def test_lawyer_upload_list_and_delete_persisted_document(database):
     db, storage = database
     lawyer = make_user(db, "lawyer", "lawyer-docs@example.com")
     case_id = workspace(db, lawyer)
-    uploaded = asyncio.run(lawyer_documents.upload_documents(
+    uploaded = asyncio.run(upload_and_process(
         case_id, [make_upload("evidence.pdf", pdf_bytes(), "application/pdf")], lawyer, db
     ))
     assert uploaded[0]["status"] == "parsed"
@@ -97,10 +110,10 @@ def test_upload_rejects_invalid_type_and_oversized_file(database):
     lawyer = make_user(db, "lawyer", "limits@example.com")
     case_id = workspace(db, lawyer)
     with pytest.raises(HTTPException) as invalid:
-        asyncio.run(lawyer_documents.upload_documents(case_id, [make_upload("malware.exe", b"x", "application/octet-stream")], lawyer, db))
+        asyncio.run(lawyer_documents.upload_documents(case_id, [make_upload("malware.exe", b"x", "application/octet-stream")], BackgroundTasks(), lawyer, db))
     assert invalid.value.status_code == 415
     with pytest.raises(HTTPException) as oversized:
-        asyncio.run(lawyer_documents.upload_documents(case_id, [make_upload("large.pdf", b"%PDF-" + b"x" * (20 * 1024 * 1024), "application/pdf")], lawyer, db))
+        asyncio.run(lawyer_documents.upload_documents(case_id, [make_upload("large.pdf", b"%PDF-" + b"x" * (20 * 1024 * 1024), "application/pdf")], BackgroundTasks(), lawyer, db))
     assert oversized.value.status_code == 413
 
 
@@ -112,7 +125,7 @@ def test_docx_text_is_extracted(database):
     word.add_paragraph("Witness statement from the case file")
     content = io.BytesIO()
     word.save(content)
-    uploaded = asyncio.run(lawyer_documents.upload_documents(
+    uploaded = asyncio.run(upload_and_process(
         case_id,
         [make_upload("statement.docx", content.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")],
         lawyer,

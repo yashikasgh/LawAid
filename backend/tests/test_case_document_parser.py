@@ -23,6 +23,7 @@ def test_native_text_pdf_records_each_page_without_ocr(monkeypatch):
     assert parsed["page_count"] == 2
     assert parsed["ocr_used"] is False
     assert [page["method"] for page in parsed["extraction_details"]] == ["native", "native"]
+    assert [page["page"] for page in parsed["page_texts"]] == [1, 2]
     assert "Second native" in parsed["text"]
 
 
@@ -66,6 +67,28 @@ def test_scanned_fir_regression_uses_ocr_and_requires_meaningful_text(monkeypatc
     assert parsed["page_count"] == 3
     assert all(page["method"] == "ocr" for page in parsed["extraction_details"])
     assert "JAHANGIR PURI" in parsed["text"] and "Bhawna Rajput" in parsed["text"]
+
+
+def test_second_scanned_fir_fixture_never_claims_native_text(monkeypatch):
+    fixture = Path(r"C:\Users\rajse\Downloads\407102441-FIR-real-sample.pdf")
+    if not fixture.exists():
+        pytest.skip("Provided FIR regression fixture is not available on this host")
+    data = fixture.read_bytes()
+    with fitz.open(stream=data, filetype="pdf") as document:
+        assert len(document) == 5
+        assert all(not page.get_text("text").strip() for page in document)
+    outputs = iter([
+        "FIR form fields readable by OCR",
+        "Odia handwritten narrative readable by OCR",
+        "Witness details readable by OCR",
+        "Action taken details readable by OCR",
+        "Signature and officer details readable by OCR",
+    ])
+    monkeypatch.setattr(parser, "_pdf_page_ocr", lambda _page: next(outputs))
+    parsed = parser.parse_case_document(data, "pdf")
+    assert parsed["ocr_used"] is True
+    assert len(parsed["page_texts"]) == 5
+    assert all(page["method"] == "ocr" for page in parsed["extraction_details"])
 
 
 def test_ocr_unavailable_does_not_claim_pdf_parsed(monkeypatch):
