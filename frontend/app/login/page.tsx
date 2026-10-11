@@ -2,9 +2,22 @@
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { authAPI } from "@/lib/api"
-import { completeLogin, getStoredUser, ROLE_ROUTES } from "@/lib/auth"
+import { completeLogin, restoreSession, ROLE_ROUTES } from "@/lib/auth"
 
 const ROLES = ["Citizen", "Police", "Lawyer"]
+
+// Post-login destination: honour a `?next=` deep link only when it is a
+// same-origin path inside the authenticated user's own role area.
+function destinationFor(role: string): string {
+  const home = ROLE_ROUTES[role.toLowerCase()] || "/"
+  if (typeof window === "undefined") return home
+  const next = new URLSearchParams(window.location.search).get("next")
+  if (next && next.startsWith("/") && !next.startsWith("//") && home !== "/" &&
+      (next === home || next.startsWith(`${home}/`) || next.startsWith(`${home}?`))) {
+    return next
+  }
+  return home
+}
 
 export default function LoginPage() {
   const router = useRouter()
@@ -17,17 +30,9 @@ export default function LoginPage() {
 
   useEffect(() => {
     const checkAuth = async () => {
-      const user = getStoredUser()
+      const user = await restoreSession()
       if (user) {
-        try {
-          await authAPI.me()
-          router.replace(ROLE_ROUTES[user.role.toLowerCase()] || "/")
-        } catch {
-          // Token is dead, clear local storage
-          localStorage.removeItem('lawaid_token')
-          localStorage.removeItem('lawaid_role')
-          localStorage.removeItem('lawaid_user')
-        }
+        router.replace(destinationFor(user.role))
       }
     }
     checkAuth()
@@ -48,9 +53,11 @@ export default function LoginPage() {
     try {
       const res = await authAPI.login(email, password, role)
       const user = await completeLogin(res.data.access_token)
-      router.push(ROLE_ROUTES[user.role] || "/")
+      router.push(destinationFor(user.role))
     } catch (err: any) {
-      if (err?.response?.status === 401) {
+      if (!err?.response) {
+        setError("Cannot reach the LawAid server. Please check that the backend is running.")
+      } else if (err.response.status === 401) {
         setError("Invalid email or password. Please try again.")
       } else if (err?.response?.status === 403) {
         setError(err.response.data.detail || "You do not have access to this portal.")
@@ -69,22 +76,8 @@ export default function LoginPage() {
     setError("")
     setMessage("")
     try {
-      const res = await fetch("http://localhost:8000/api/auth/forgot-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email })
-      })
-      if (!res.ok) throw new Error("Failed to request password reset")
-      const data = await res.json()
-      
-      // In development, the backend returns the token for easy testing
-      if (data.reset_token) {
-        setResetToken(data.reset_token)
-        setMessage("Development Mode: Token generated. Proceed to reset.")
-        setTimeout(() => setMode("reset"), 1500)
-      } else {
-        setMessage(data.message)
-      }
+      const res = await authAPI.forgotPassword(email)
+      setMessage(res.data.message)
     } catch (err: any) {
       setError(err.message || "Something went wrong")
     } finally {
@@ -101,13 +94,7 @@ export default function LoginPage() {
     setError("")
     setMessage("")
     try {
-      const res = await fetch("http://localhost:8000/api/auth/reset-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: resetToken, new_password: newPassword })
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || "Failed to reset password")
+      await authAPI.resetPassword(resetToken, newPassword)
       
       setMessage("Password updated successfully! Returning to login...")
       setTimeout(() => {
@@ -118,7 +105,7 @@ export default function LoginPage() {
         setMessage("")
       }, 2000)
     } catch (err: any) {
-      setError(err.message || "Something went wrong")
+      setError(err?.response?.data?.detail || "Something went wrong")
     } finally {
       setLoading(false)
     }

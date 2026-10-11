@@ -387,7 +387,7 @@ def test_police_generate_fir_supported_sections_mapping(monkeypatch):
         }
     ]
 
-    monkeypatch.setattr("ai.rag.pipeline.run_pipeline", lambda raw_incident: {
+    monkeypatch.setattr("ai.rag.pipeline.run_pipeline", lambda raw_incident, **kwargs: {
         "status": "success",
         "sanitized_incident": raw_incident,
         "analysis": mock_analysis

@@ -65,7 +65,7 @@
   - Case T20 (Theft in dwelling house): Section 305 failed retrieval.
 - **Legal Reasoning Failures**: 0 instances (section retrieved but rejected or missed by LLM).
 - **Missing-Fact Handling Failures**: 3 instances.
-  - Case T20 (Theft in dwelling house): Expected uncertainty for ['331', '329'] missed.
+  - Case T20 (Theft in dwelling house): Expected uncertainty for ['329', '331'] missed.
   - Case T21 (Organised/petty organised crime scenario): Expected uncertainty for ['111'] missed.
   - Case T28 (Another ambiguous case): Expected uncertainty for ['303'] missed.
 

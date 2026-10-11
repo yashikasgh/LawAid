@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import Navbar from '@/components/Navbar'
 import { getStoredUser } from '@/lib/auth'
+import { apiFetch } from '@/lib/api'
 
 export default function CitizenDashboard() {
   const [user, setUser] =
@@ -16,13 +17,13 @@ export default function CitizenDashboard() {
   const cards = [
     {
       icon: <FIRIcon />,
-      title: 'Understand FIR',
+      title: 'FIR Understanding',
       desc: 'Upload an FIR and get a plain-language explanation.',
       href: '/citizen/understand',
     },
     {
       icon: <ChatIcon />,
-      title: 'Legal Chat',
+      title: 'Legal Chatbot',
       desc: 'Ask legal questions and get AI-powered assistance.',
       href: '/citizen/chat',
     },
@@ -31,12 +32,6 @@ export default function CitizenDashboard() {
       title: 'BNS Search',
       desc: 'Search Bharatiya Nyaya Sanhita sections instantly.',
       href: '/bns-search',
-    },
-    {
-      icon: <span className="text-2xl">📝</span>,
-      title: 'File a Complaint',
-      desc: 'Describe an incident and get BNS section analysis.',
-      href: '/citizen/complaint',
     },
   ]
 
@@ -102,7 +97,7 @@ export default function CitizenDashboard() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
 
               {cards.map((card) => (
                 <Link
@@ -137,9 +132,8 @@ export default function CitizenDashboard() {
 
                 </Link>
               ))}
-
             </div>
-            
+
             <ComplaintsHistory />
           </section>
 
@@ -343,6 +337,7 @@ function ScaleIcon() {
     </svg>
   )
 }
+
 function ComplaintsHistory() {
   const [complaints, setComplaints] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -350,10 +345,7 @@ function ComplaintsHistory() {
   useEffect(() => {
     async function loadComplaints() {
       try {
-        const token = localStorage.getItem("access_token")
-        const res = await fetch("http://localhost:8000/api/complaints/my", {
-          headers: { "Authorization": `Bearer ${token}` }
-        })
+        const res = await apiFetch("/api/complaints/my")
         if (res.ok) {
           const data = await res.json()
           setComplaints(data)
@@ -396,4 +388,3 @@ function ComplaintsHistory() {
     </div>
   )
 }
-

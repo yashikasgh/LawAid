@@ -4,13 +4,10 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { authAPI } from '@/lib/api'
-import { completeLogin, getStoredUser, ROLE_ROUTES } from '@/lib/auth'
-
-const ROLES = ['Citizen', 'Police', 'Lawyer']
+import { completeLogin, restoreSession, ROLE_ROUTES } from '@/lib/auth'
 
 export default function RegisterPage() {
   const router = useRouter()
-  const [role, setRole] = useState('Citizen')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -20,16 +17,9 @@ export default function RegisterPage() {
 
   useEffect(() => {
     const checkAuth = async () => {
-      const user = getStoredUser()
+      const user = await restoreSession()
       if (user) {
-        try {
-          await authAPI.me()
-          router.replace(ROLE_ROUTES[user.role.toLowerCase()] || "/")
-        } catch {
-          localStorage.removeItem('lawaid_token')
-          localStorage.removeItem('lawaid_role')
-          localStorage.removeItem('lawaid_user')
-        }
+        router.replace(ROLE_ROUTES[user.role.toLowerCase()] || "/")
       }
     }
     checkAuth()
@@ -56,7 +46,7 @@ export default function RegisterPage() {
     setLoading(true)
 
     try {
-      await authAPI.register(email, password, role)
+      await authAPI.register(email, password)
 
       // Save name on frontend using the normalized email as the key
       localStorage.setItem(
@@ -65,13 +55,15 @@ export default function RegisterPage() {
       )
 
       // Registration succeeded — log the user in right away
-      const loginRes = await authAPI.login(email, password, role)
+      const loginRes = await authAPI.login(email, password, 'Citizen')
       const user = await completeLogin(loginRes.data.access_token)
 
       router.push(ROLE_ROUTES[user.role] || '/')
     } catch (err: any) {
       if (err?.response?.status === 400) {
         setError('That email is already registered. Try logging in instead.')
+      } else if (err?.response?.status === 422) {
+        setError('Please enter a valid email and a password of at least 8 characters.')
       } else {
         setError('Something went wrong. Please try again.')
       }
@@ -144,24 +136,9 @@ export default function RegisterPage() {
                 Create Account
               </h2>
 
-              {/* ROLE BUTTONS */}
-              <div className="flex gap-2 mb-7">
-
-                {ROLES.map(r => (
-                  <button
-                    key={r}
-                    onClick={() => setRole(r)}
-                    className={`flex-1 py-3 rounded-[10px] text-[15px] font-semibold transition-all duration-200 border ${
-                      role === r
-                        ? 'bg-[#15539a] text-white border-[#15539a] shadow-sm'
-                        : 'bg-white/60 text-[#56718f] border-white/70 hover:bg-white/90 hover:border-[#15539a]/30 hover:text-[#12335B] hover:shadow-sm'
-                    }`}
-                  >
-                    {r}
-                  </button>
-                ))}
-
-              </div>
+              <p className="mb-7 rounded-[10px] border border-[#15539a]/20 bg-white/60 px-4 py-3 text-[14px] text-[#56718f]">
+                Public registration creates a Citizen account. Police and Lawyer accounts are provisioned separately.
+              </p>
 
               <div className="flex flex-col gap-2">
 

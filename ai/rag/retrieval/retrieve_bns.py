@@ -72,24 +72,116 @@ def _extract_explicit_section_numbers(query: str) -> List[int]:
 def _extract_offence_keywords(query: str) -> List[str]:
     """
     Extracts core statutory offence terms from query to ensure canonical provision discovery
-    (e.g., general theft Section 303 for 'theft').
+    (e.g., general theft Section 303 for 'theft' or 'stole').
     """
     if not query or not isinstance(query, str):
         return []
 
     q_lower = query.lower()
+
+    synonyms = {
+        "stole": "theft",
+        "stolen": "theft",
+        "steal": "theft",
+        "stealing": "theft",
+        "thief": "theft",
+        "killed": "murder",
+        "kill": "murder",
+        "killing": "murder",
+        "cheated": "cheating",
+        "cheat": "cheating",
+        "kidnapped": "kidnapping",
+    }
+    matched = []
+    for word, canonical in synonyms.items():
+        if re.search(r'\b' + re.escape(word) + r'\b', q_lower):
+            if canonical not in matched:
+                matched.append(canonical)
+
     canonical_offences = [
         "theft", "snatching", "robbery", "dacoity", "extortion",
         "cheating", "forgery", "trespass", "house-breaking", "burglary",
         "murder", "culpable homicide", "hurt", "grievous hurt", "assault",
         "kidnapping", "abduction", "rape", "outraging modesty", "stalking",
-        "dowry", "cruelty", "defamation", "affray", "rioting", "unlawful assembly"
+        "dowry", "cruelty", "defamation", "affray", "rioting", "unlawful assembly",
+        "child", "missing", "abandonment"
     ]
-    matched = []
     for off in canonical_offences:
         if re.search(r'\b' + re.escape(off) + r'\b', q_lower):
-            matched.append(off)
+            if off not in matched:
+                matched.append(off)
     return matched
+
+
+def _keyword_fallback_search(collection, query: str, top_k: int = 5, seen_ids: set = None) -> List[Dict[str, Any]]:
+    """
+    Performs keyword & term frequency matching across local ChromaDB collection documents.
+    Serves as an essential fallback when Ollama embeddings are offline or unavailable.
+    """
+    if seen_ids is None:
+        seen_ids = set()
+
+    try:
+        all_data = collection.get(include=["metadatas", "documents"])
+        ids = all_data.get("ids", [])
+        metas = all_data.get("metadatas", [])
+        docs = all_data.get("documents", [])
+
+        stop_words = {'what', 'is', 'the', 'for', 'under', 'bns', 'my', 'a', 'an', 'in', 'of', 'and', 'to', 'if', 'do', 'should', 'i', 'how', 'please', 'give', 'me', 'tell'}
+        words = [w.lower() for w in re.findall(r'\b[a-zA-Z]{3,}\b', query) if w.lower() not in stop_words]
+
+        if not words:
+            words = [w.lower() for w in re.findall(r'\b[a-zA-Z]+\b', query)]
+
+        scored = []
+        for idx in range(len(ids)):
+            d_id = ids[idx]
+            if d_id in seen_ids:
+                continue
+
+            meta = metas[idx] if idx < len(metas) else {}
+            doc_text = docs[idx] if idx < len(docs) else ""
+            title = str(meta.get("title", ""))
+            section = str(meta.get("section", ""))
+            full_searchable = f"Section {section} {title} {doc_text}".lower()
+
+            score = 0
+            for w in words:
+                if re.search(r'\b' + re.escape(w) + r'\b', title.lower()):
+                    score += 10
+                elif w in title.lower():
+                    score += 4
+                matches = len(re.findall(r'\b' + re.escape(w) + r'\b', full_searchable))
+                score += matches * 2
+
+            if score > 0:
+                scored.append((score, d_id, meta, doc_text))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        fallback_results = []
+        for rank_offset, (score, d_id, meta, doc_text) in enumerate(scored[:top_k], 1):
+            item_dict = dict(meta) if isinstance(meta, dict) else {}
+            calc_dist = round(max(0.12, 0.45 - (score * 0.04)), 4)
+            item_dict.update({
+                "id": d_id,
+                "act": meta.get("act", "BNS"),
+                "act_name": meta.get("act_name", "Bharatiya Nyaya Sanhita (BNS), 2023"),
+                "section": meta.get("section", ""),
+                "clause": meta.get("clause", ""),
+                "title": meta.get("title", ""),
+                "distance": calc_dist,
+                "text": doc_text,
+                "retrieval_method": "keyword_fallback_search"
+            })
+            if not item_dict.get("target_clause_text") and item_dict.get("text"):
+                item_dict["target_clause_text"] = item_dict["text"]
+            fallback_results.append(item_dict)
+
+        return fallback_results
+    except Exception as e:
+        print(f"[Keyword Fallback Search Notice] {e}")
+        return []
 
 
 def retrieve(query: str, top_k: int = TOP_K, db_path: str = DB_PATH, collection_name: str = COLLECTION_NAME):
@@ -204,15 +296,31 @@ def retrieve(query: str, top_k: int = TOP_K, db_path: str = DB_PATH, collection_
     # Step 3: Semantic Vector Search
     fetch_limit = max(top_k, 15) if (explicit_sections or offence_terms) else top_k
     try:
-        response = ollama.embed(model=EMBEDDING_MODEL, input=str(query).strip())
-        embeddings = response.get("embeddings", [])
-        if embeddings:
-            query_embedding = embeddings[0]
+        q_str = str(query).strip()
+        vector_res = None
+
+        # Attempt Ollama embedding if dimension matches stored collection (384d)
+        try:
+            response = ollama.embed(model=EMBEDDING_MODEL, input=q_str)
+            embeddings = response.get("embeddings", [])
+            if embeddings and len(embeddings[0]) == 384:
+                vector_res = collection.query(
+                    query_embeddings=[embeddings[0]],
+                    n_results=fetch_limit,
+                    include=["documents", "metadatas", "distances"]
+                )
+        except Exception:
+            pass
+
+        # Fall back to collection's native 384-dimensional query_texts embedding function
+        if vector_res is None:
             vector_res = collection.query(
-                query_embeddings=[query_embedding],
+                query_texts=[q_str],
                 n_results=fetch_limit,
                 include=["documents", "metadatas", "distances"]
             )
+
+        if vector_res:
             v_ids = vector_res.get("ids", [[]])[0]
             v_docs = vector_res.get("documents", [[]])[0]
             v_metas = vector_res.get("metadatas", [[]])[0]
@@ -244,7 +352,17 @@ def retrieve(query: str, top_k: int = TOP_K, db_path: str = DB_PATH, collection_
     except Exception as e:
         print(f"[Semantic Vector Search Notice] {e}")
 
-    # Step 4: Re-assign consecutive ranks and return top_k
+    # Step 4: Keyword Search Fallback if retrieved results are below requested top_k
+    target_count = top_k if (top_k and isinstance(top_k, int) and top_k > 0) else 5
+    if len(retrieved_items) < target_count:
+        needed = target_count - len(retrieved_items)
+        fallback_items = _keyword_fallback_search(collection, query, top_k=needed, seen_ids=seen_ids)
+        for fb in fallback_items:
+            if fb["id"] not in seen_ids:
+                seen_ids.add(fb["id"])
+                retrieved_items.append(fb)
+
+    # Step 5: Re-assign consecutive ranks and return top_k
     for idx, item in enumerate(retrieved_items):
         item["rank"] = idx + 1
 

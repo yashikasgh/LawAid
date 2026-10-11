@@ -83,13 +83,32 @@ def test_police_validate_fir():
 
 def test_police_approve_fir():
     import uuid
+    from unittest.mock import patch
     headers = get_police_headers()
+    approval_id = f"app_test_{uuid.uuid4().hex[:5]}"
+    res_otp = client.post("/police/request-fir-approval-otp", json={"approval_id": approval_id}, headers=headers)
+    assert res_otp.status_code == 200
+
     unique_draft_id = f"FIR/2026/{uuid.uuid4().hex[:5].upper()}"
-    res = client.post("/police/approve-fir", json={"fir_draft_id": unique_draft_id, "officer_name": "Inspector Sharma"}, headers=headers)
-    assert res.status_code == 200
-    data = res.json()
-    assert data["status"] == "APPROVED"
-    assert "sha256_hash" in data
+    payload = {
+        "fir_draft_id": unique_draft_id,
+        "officer_name": "Inspector Sharma",
+        "approval_id": approval_id,
+        "otp_code": "123456",
+        "fir_data": {
+            "police_station": "Central PS",
+            "district": "Delhi",
+            "state": "Delhi",
+            "complainant_name": "Ramesh",
+            "incident_details": "Theft of mobile phone from market."
+        }
+    }
+    with patch("app.services.fir_approval.verify_approval_otp", return_value=True):
+        res = client.post("/police/approve-fir", json=payload, headers=headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "APPROVED"
+        assert "sha256_hash" in data
 
 
 def test_legal_chat():

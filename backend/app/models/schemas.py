@@ -1,15 +1,19 @@
-from pydantic import BaseModel, EmailStr, ConfigDict
+from typing import Literal
+
+from pydantic import BaseModel, EmailStr, ConfigDict, Field
+
+Role = Literal["citizen", "police", "lawyer", "admin"]
 
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str
-    role: str
+    password: str = Field(min_length=8, max_length=128)
+    role: Role
 
 class UserLoginRequest(BaseModel):
     """Login schema. User must provide the role of the portal they are logging in from."""
     email: EmailStr
-    password: str
-    role: str
+    password: str = Field(min_length=1, max_length=128)
+    role: Role
 
 class UserResponse(BaseModel):
     id: int
@@ -23,8 +27,8 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 class ForgotPasswordRequest(BaseModel):
-    email: str
+    email: EmailStr
 
 class ResetPasswordRequest(BaseModel):
-    token: str
-    new_password: str
+    token: str = Field(min_length=32, max_length=256)
+    new_password: str = Field(min_length=8, max_length=128)

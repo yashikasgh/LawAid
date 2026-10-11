@@ -234,3 +234,65 @@ def test_saved_fir_crud_and_user_isolation():
     # 8. User A verifies it is gone
     res_detail_a_after = client.get(f"/fir/saved/{saved_id}", headers=headers_user_a)
     assert res_detail_a_after.status_code == 404
+
+
+def test_section_identity_resolution_regression():
+    from ai.rag.analysis.legal_analyzer import analyze_incident, MockLLMClient, Workload
+    import json
+
+    doc_map_sample = [
+        {"id": "bns_147", "section": "147", "title": "Waging war"},
+        {"id": "bns_148", "section": "148", "title": "Conspiracy"},
+        {"id": "bns_152", "section": "152", "title": "Sovereignty"},
+        {"id": "bns_196_196(1)", "section": "196", "title": "Enmity"},
+        {"id": "bns_197_197(1)", "section": "197", "title": "National integration"},
+        {"id": "bns_61_61(2) (a)", "section": "61", "title": "Criminal conspiracy"},
+        {"id": "bns_4", "section": "4", "title": "Punishments"},
+        {"id": "bns_5", "section": "5", "title": "Commutation"}
+    ]
+
+    llm_payload = json.dumps({
+        "status": "success",
+        "analysis": [
+            {"document_id": "147", "section": "147", "title": "Waging war", "applicability": "supported", "reasoning": "Test"},
+            {"document_id": "148", "section": "148", "title": "Conspiracy", "applicability": "supported", "reasoning": "Test"},
+            {"document_id": "152", "section": "152", "title": "Sovereignty", "applicability": "supported", "reasoning": "Test"},
+            {"document_id": "196", "section": "196", "title": "Enmity", "applicability": "supported", "reasoning": "Test"},
+            {"document_id": "197", "section": "197", "title": "National integration", "applicability": "supported", "reasoning": "Test"},
+            {"document_id": "61", "section": "61", "title": "Conspiracy", "applicability": "supported", "reasoning": "Test"},
+            {"document_id": "4", "section": "4", "title": "Punishments", "applicability": "supported", "reasoning": "Test"},
+            {"document_id": "5", "section": "5", "title": "Commutation", "applicability": "supported", "reasoning": "Test"}
+        ],
+        "limitations": []
+    })
+
+    mock_client = MockLLMClient([llm_payload])
+    res = analyze_incident(
+        ner_result={"offences": ["general"]},
+        retrieval_result=doc_map_sample,
+        llm_client=mock_client,
+        workload=Workload.CITIZEN_FIR_ANALYSIS
+    )
+
+    analysis_items = res.get("analysis", [])
+    resolved_sections = [str(item.get("section")) for item in analysis_items]
+
+    # Verify each section resolves to its exact section, NOT to section 4
+    assert "147" in resolved_sections
+    assert "148" in resolved_sections
+    assert "152" in resolved_sections
+    assert "196" in resolved_sections
+    assert "197" in resolved_sections
+    assert "61" in resolved_sections
+    assert "4" in resolved_sections
+    assert "5" in resolved_sections
+
+    # Check titles for non-collision with section 4
+    sec_147_item = next(i for i in analysis_items if str(i.get("section")) == "147")
+    assert sec_147_item["title"] == "Waging war"
+
+    sec_148_item = next(i for i in analysis_items if str(i.get("section")) == "148")
+    assert sec_148_item["title"] == "Conspiracy"
+
+    sec_4_item = next(i for i in analysis_items if str(i.get("section")) == "4")
+    assert sec_4_item["title"] == "Punishments"

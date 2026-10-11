@@ -95,23 +95,25 @@ def extract_fir_metadata(cleaned_text: str) -> Dict[str, str]:
         return "Not stated in the FIR"
 
     fir_number = _extract_regex([
+        r'(?:FIR|RC|R\.C\.|Crime\s+No|Case\s+No|Ref|Reference)\s*(?:No\.?|Number|Ref\.?)?\s*[:\-]?\s*([A-Za-z0-9/\-\.]{3,35})',
         r'FIR\s*(?:No\.?|Number)\s*[:\-]?\s*([0-9]+/[0-9]{2,4}(?=[A-Za-z\s]|$)|[A-Za-z0-9/\-]+?\b)',
         r'FIR\s*[:\-]\s*([0-9]+/[0-9]{2,4}(?=[A-Za-z\s]|$)|[A-Za-z0-9/\-]+?\b)',
     ])
 
     police_station = _extract_regex([
-        r'Police\s*Station\s*(?:\'s\s*Name|\'s\s*Details|Name|Details)?\s*[:\-]?\s*([A-Za-z0-9\s,]+?)(?=\n|District|FIR|Date|Time|$)',
-        r'P\.S\.?\s*[:\-]?\s*([A-Za-z0-9\s,]+?)(?=\n|District|FIR|Date|Time|$)',
+        r'Police\s*Station\s*(?:\'s\s*Name|\'s\s*Details|Name|Details)?\s*[:\-]?\s*([A-Za-z0-9\s,\-\.\(\)]+?)(?=\n|District|FIR|RC|Date|Time|$)',
+        r'P\.S\.?\s*[:\-]?\s*([A-Za-z0-9\s,\-\.\(\)]+?)(?=\n|District|FIR|RC|Date|Time|$)',
+        r'\b([A-Za-z0-9\s,]+?\s+Police\s+Station[A-Za-z0-9\s,]*)\b',
     ])
 
     district = _extract_regex([
-        r'District\s*[:\-]?\s*([A-Za-z0-9\s]+?)(?=\n|State|P\.S|FIR|Date|$)',
-        r'Dist\.?\s*[:\-]?\s*([A-Za-z0-9\s]+?)(?=\n|State|P\.S|FIR|Date|$)',
+        r'District\s*[:\-]?\s*([A-Za-z0-9\s,\-\.]+?)(?=\n|State|P\.S|FIR|RC|Date|$)',
+        r'Dist\.?\s*[:\-]?\s*([A-Za-z0-9\s,\-\.]+?)(?=\n|State|P\.S|FIR|RC|Date|$)',
     ])
 
     date_of_report = _extract_regex([
-        r'(?:Date\s*of\s*FIR|Date\s*of\s*Report|FIR\s*Date)\s*[:\-]?\s*([0-9]{1,2}[/\-\.][0-9]{1,2}[/\-\.][0-9]{2,4})',
-        r'Dated?\s*[:\-]?\s*([0-9]{1,2}[/\-\.][0-9]{1,2}[/\-\.][0-9]{2,4})',
+        r'(?:Date\s*of\s*FIR|Date\s*of\s*Report|FIR\s*Date|Dated?)\s*[:\-]?\s*([0-9]{1,2}[/\-\.][0-9]{1,2}[/\-\.][0-9]{2,4})',
+        r'Date\s*[:\-]?\s*([0-9]{1,2}[/\-\.][0-9]{1,2}[/\-\.][0-9]{2,4})',
         r'\b([0-9]{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+[0-9]{2,4})\b',
     ])
 
@@ -121,12 +123,12 @@ def extract_fir_metadata(cleaned_text: str) -> Dict[str, str]:
     ])
 
     informant = _extract_regex([
-        r'(?:Informant|Complainant)\s*(?:\'s\s*Details|\'s\s*Name|Details|Name)?\s*[:\-]?\s*([^\n]+?)(?=\n|Place|Police|District|FIR|Date|Time|$)',
+        r'(?:Informant|Complainant)\s*(?:\'s\s*Details|\'s\s*Name|Details|Name)?\s*[:\-]?\s*([^\n]+?)(?=\n|Place|Police|District|FIR|RC|Date|Time|$)',
     ])
 
     accused_details = _extract_regex([
-        r'Accused\s*(?:Details|Person)?\s*[:\-]?\s*([^\n]+?)(?=\n|Place|Police|District|FIR|Date|Time|$)',
-        r'Suspect\s*[:\-]?\s*([^\n]+?)(?=\n|Place|Police|District|FIR|Date|Time|$)',
+        r'Accused\s*(?:Details|Person)?\s*[:\-]?\s*([^\n]+?)(?=\n|Place|Police|District|FIR|RC|Date|Time|$)',
+        r'Suspect\s*[:\-]?\s*([^\n]+?)(?=\n|Place|Police|District|FIR|RC|Date|Time|$)',
     ])
 
     place_of_occurrence = _extract_regex([
@@ -142,6 +144,19 @@ def extract_fir_metadata(cleaned_text: str) -> Dict[str, str]:
         r'Witness(?:es)?\s*[:\-]?\s*([^\n]+)',
     ])
 
+    # Post-process district and police_station to avoid header leakage
+    if district != "Not stated in the FIR":
+        district = re.sub(r'\s+(?:State|P\.S\.?|Police|FIR|RC|Date|Time).*$', '', district, flags=re.IGNORECASE).strip()
+        district = re.sub(r'^[,\s.:;\-\'\"\(\)]+|[,\s.:;\-\'\"\(\)]+$', '', district).strip()
+        if len(district) < 2 or district.lower() in ["details", "not specified", "unknown"]:
+            district = "Not stated in the FIR"
+
+    if police_station != "Not stated in the FIR":
+        police_station = re.sub(r'\s+(?:District|FIR|RC|Date|Time).*$', '', police_station, flags=re.IGNORECASE).strip()
+        police_station = re.sub(r'^[,\s.:;\-\'\"\(\)]+|[,\s.:;\-\'\"\(\)]+$', '', police_station).strip()
+        if len(police_station) < 2 or police_station.lower() in ["details", "not specified", "unknown"]:
+            police_station = "Not stated in the FIR"
+
     return {
         "fir_number": fir_number,
         "police_station": police_station,
@@ -154,3 +169,155 @@ def extract_fir_metadata(cleaned_text: str) -> Dict[str, str]:
         "injuries_damage": injuries_damage,
         "witnesses": witnesses
     }
+
+
+def normalize_statute_title(raw_act: str) -> str:
+    """
+    Standardizes raw statute text to standard canonical legal titles.
+    """
+    if not raw_act:
+        return "Bharatiya Nyaya Sanhita, 2023"
+
+    cleaned = re.sub(r'^\s*(?:\([a-z0-9]+\)|[0-9]+\.|\*|\-)\s*', '', raw_act, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r'^[,\s.:;\-\'\"\(\)]+|[,\s.:;\-\'\"\(\)]+$', '', cleaned).strip()
+    act_lower = cleaned.lower()
+
+    if "explosive" in act_lower:
+        return "Explosive Substances Act, 1908"
+    if "unlawful" in act_lower or "uapa" in act_lower:
+        return "Unlawful Activities (Prevention) Act, 1967"
+    if "indian penal" in act_lower or "ipc" in act_lower:
+        return "Indian Penal Code, 1860"
+    if "nagarik" in act_lower or "bnss" in act_lower:
+        return "Bharatiya Nagarik Suraksha Sanhita, 2023"
+    if "bns" in act_lower or "nyaya" in act_lower:
+        return "Bharatiya Nyaya Sanhita, 2023"
+    if "arms" in act_lower:
+        return "Arms Act, 1959"
+    if "narcotic" in act_lower or "ndps" in act_lower:
+        return "Narcotic Drugs and Psychotropic Substances Act, 1985"
+    if "corruption" in act_lower:
+        return "Prevention of Corruption Act, 1988"
+
+    return cleaned if cleaned else "Bharatiya Nyaya Sanhita, 2023"
+
+
+def extract_explicit_fir_provisions(text: str) -> list:
+    """
+    Extracts explicit recorded provisions along with their specific statute names
+    from FIR Item 2 (Acts & Sections).
+    Returns a list of dicts: [{'section': '3', 'act': 'Explosive Substances Act, 1908'}, ...]
+    """
+    if not text:
+        return []
+
+    results = []
+    seen = set()
+
+    # Match lines containing Act: ... Sections: ...
+    for line in text.splitlines():
+        line_s = line.strip()
+        if not line_s:
+            continue
+        m = re.search(r'\bAct\s*[:\-]\s*(.+?)\s+Sections?\s*[:\-]\s*([0-9\(\)a-zA-Z\s/,&]+)', line_s, re.IGNORECASE)
+        if m:
+            act_raw = m.group(1).strip()
+            sec_raw = m.group(2).strip()
+
+            act_clean = normalize_statute_title(act_raw)
+            if act_clean.lower() in ["item 2", "acts &", "acts and", "2.", "acts"]:
+                continue
+
+            sec_tokens = re.split(r'[/,;&\s]+', sec_raw)
+            for tok in sec_tokens:
+                tok = tok.strip().rstrip('.,;:/-')
+                if tok and tok.lower() not in ["and", "&", "sec", "sections", "section", "act"]:
+                    m_sec = re.match(r'^(\d{1,4}(?:\([a-zA-Z0-9]+\))*[a-zA-Z]?)$', tok)
+                    if m_sec:
+                        sec_val = m_sec.group(1)
+                        if (sec_val, act_clean) not in seen:
+                            seen.add((sec_val, act_clean))
+                            results.append({"section": sec_val, "act": act_clean})
+
+    if not results:
+        bns_sections = extract_explicit_fir_sections(text)
+        for s in bns_sections:
+            results.append({"section": s, "act": "Bharatiya Nyaya Sanhita, 2023"})
+
+    return results
+
+
+def extract_explicit_fir_sections(text: str) -> list:
+    """
+    Extracts canonical recorded offence sections strictly from FIR Item 2 (Acts & Sections).
+    Parses slash/comma-separated section cells (e.g., '134/303(2)' -> ['134', '303(2)']),
+    preserves sub-sections (e.g., '303(2)'), verifies BNS Act context, deduplicates entries,
+    and rejects narrative/unrelated numbers.
+    """
+    if not text:
+        return []
+
+    found_sections = []
+    seen = set()
+
+    def _clean_and_add_section(sec_token: str):
+        sec_token = sec_token.strip().rstrip('.,;:/-')
+        if not sec_token:
+            return
+        # Match valid BNS section format: e.g. 134, 303(2), 61(2), 190(2), 197(1)
+        m = re.match(r'^(\d{1,3}(?:\([a-zA-Z0-9]+\))*[a-zA-Z]?)$', sec_token)
+        if m:
+            full_sec = m.group(1)
+            base_num_match = re.match(r'^\d+', full_sec)
+            if base_num_match:
+                num = int(base_num_match.group())
+                # Valid BNS section range (1 to 359)
+                if 1 <= num <= 359 and full_sec not in seen:
+                    seen.add(full_sec)
+                    found_sections.append(full_sec)
+
+    def _parse_section_blob(blob: str):
+        # Split by slashes, commas, 'and', semicolons, newlines, or spaces
+        tokens = re.split(r'[/,;\s]+', blob)
+        for tok in tokens:
+            _clean_and_add_section(tok)
+
+    # 1. Primary: Parse from Item 2 / Acts & Sections structured content
+    # Pair matching for "Act:" and "Sections:"
+    act_sec_pairs = re.findall(
+        r'Act\s*[:\-]?\s*([^\n]+?)(?:\n|\s)+Sections?\s*[:\-]?\s*([^\n]+)',
+        text,
+        re.IGNORECASE
+    )
+
+    for act_text, sec_text in act_sec_pairs:
+        act_upper = act_text.upper()
+        if "BNS" in act_upper or "BHARATIYA NYAYA" in act_upper or "NYAYA SANHITA" in act_upper:
+            _parse_section_blob(sec_text)
+
+    if not found_sections:
+        # Search Item 2 block text if pair matching missed layout
+        item2_patterns = [
+            r'(?:2\.\s*(?:\([a-z0-9]+\)\s*)?Act|Item\s*2|Acts?\s*(?:&|and)?\s*Sections?)\s*[:\-]?\s*([\s\S]{1,400}?)(?=\n\s*3\.|3\.\s*Occurrence|\n\s*4\.|4\.\s*Type|\n\s*12\.|$)',
+        ]
+        for pat in item2_patterns:
+            for m in re.finditer(pat, text, re.IGNORECASE):
+                block = m.group(1)
+                if re.search(r'\b(?:BNS|BHARATIYA\s+NYAYA\s+SANHITA|BHARATIYA\s+NYAYA)\b', block, re.IGNORECASE):
+                    sec_matches = re.finditer(r'Sections?\s*[:\-]?\s*([0-9\(\)a-zA-Z\s/,]+)', block, re.IGNORECASE)
+                    for sm in sec_matches:
+                        _parse_section_blob(sm.group(1))
+
+    # 2. Corroborating fallback ONLY if Item 2 extraction found no sections:
+    # Require explicit BNS tag (e.g. "U/s 134/303(2) BNS" or "Section 134/303(2) BNS")
+    if not found_sections:
+        explicit_bns_pattern1 = r'(?:\bsec(?:tion)?s?\.?|\bu[/\\]?s\.?|\bunder\s+sections?)\s*([0-9\(\)a-zA-Z\s/,]+?)\s*(?:BNS|BHARATIYA\s+NYAYA\s+SANHITA)\b'
+        for m in re.finditer(explicit_bns_pattern1, text, re.IGNORECASE):
+            _parse_section_blob(m.group(1))
+
+        explicit_bns_pattern2 = r'\b(?:BNS|BHARATIYA\s+NYAYA\s+SANHITA)\s*(?:u[/\\]?s\.?|sec(?:tion)?s?\.?)?\s*([0-9\(\)a-zA-Z\s/,]+)'
+        for m in re.finditer(explicit_bns_pattern2, text, re.IGNORECASE):
+            first_line = m.group(1).split('\n')[0]
+            _parse_section_blob(first_line[:40])
+
+    return found_sections
