@@ -31,8 +31,6 @@ FIR guidance • BNS legal retrieval (RAG) • Legal document OCR & analysis
 - [Running with Docker](#-running-with-docker)
 - [API Overview](#-api-overview)
 - [Evaluation](#-evaluation)
-- [Testing](#-testing)
-- [Contributing](#-contributing)
 
 ---
 
