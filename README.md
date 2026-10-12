@@ -248,27 +248,4 @@ See [`evaluation_report.md`](evaluation/evaluation_report.md) for results.
 
 ---
 
-## 🧪 Testing
 
-```bash
-cd backend
-pytest
-```
-
----
-
-## 🤝 Contributing
-
-1. Fork the repo
-2. Create a branch: `git checkout -b feature/your-feature`
-3. Commit your changes: `git commit -m "Add your feature"`
-4. Push: `git push origin feature/your-feature`
-5. Open a Pull Request
-
----
-
-<div align="center">
-
-Made with ❤️ for accessible justice
-
-</div>
