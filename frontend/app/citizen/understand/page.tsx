@@ -264,9 +264,31 @@ export default function UnderstandPage() {
       const res = await firAPI.understand(fileToAnalyze)
       setResult(res.data)
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.detail ||
-        'Analysis failed. Make sure the backend server is running and the file format is supported.'
+      let msg = 'Analysis failed. Make sure the backend server is running and the file format is supported.'
+      
+      if (err?.response) {
+        // The request was made and the server responded with a status code
+        if (err.response.data && err.response.data.detail) {
+          if (Array.isArray(err.response.data.detail)) {
+             msg = err.response.data.detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ')
+          } else if (typeof err.response.data.detail === 'string') {
+             msg = err.response.data.detail
+          } else {
+             msg = JSON.stringify(err.response.data.detail)
+          }
+        } else if (err.response.status === 413) {
+          msg = 'The file is too large for the server to process.'
+        } else {
+          msg = `Server returned an error: ${err.response.statusText || err.response.status}`
+        }
+      } else if (err?.request) {
+        // The request was made but no response was received (Network error, CORS, or server offline)
+        msg = 'Could not reach the server. Please check your network connection and ensure the backend is running.'
+      } else {
+        // Something happened in setting up the request
+        msg = err.message || msg
+      }
+      
       setError(msg)
     } finally {
       setLoading(false)

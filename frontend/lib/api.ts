@@ -26,6 +26,15 @@ function redirectToLoginOnExpiredSession(requestPath: string | undefined) {
   window.location.assign(`/login?next=${encodeURIComponent(pathname + search)}`)
 }
 
+api.interceptors.request.use((config) => {
+  if (config.data instanceof FormData) {
+    if (config.headers) {
+      delete config.headers['Content-Type']
+    }
+  }
+  return config
+})
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -74,17 +83,13 @@ export const firAPI = {
   understand: async (file: File) => {
     const form = new FormData()
     form.append('file', file)
-    return api.post('/fir/understand', form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
+    return api.post('/fir/understand', form)
   },
 
   verify: (firId: string, file: File) => {
     const form = new FormData()
     form.append('file', file)
-    return api.post(`/fir/verify?fir_id=${encodeURIComponent(firId)}`, form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
+    return api.post(`/fir/verify?fir_id=${encodeURIComponent(firId)}`, form)
   },
 
   checkDuplicate: (complaintText: string) =>
@@ -130,7 +135,6 @@ export const lawyerDocumentsAPI = {
     const form = new FormData()
     files.forEach((file) => form.append('files', file))
     return api.post(`/lawyer/cases/${caseId}/documents`, form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
       onUploadProgress: (event) => {
         if (event.total && onProgress) onProgress(Math.round((event.loaded / event.total) * 100))
       },
@@ -168,9 +172,7 @@ export const policeAPI = {
   transcribe: (audio: File) => {
     const form = new FormData()
     form.append('audio', audio)
-    return api.post('/police/transcribe', form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
+    return api.post('/police/transcribe', form)
   },
   extractStatement: (statement: string) =>
     api.post('/police/extract-statement', { statement }),
